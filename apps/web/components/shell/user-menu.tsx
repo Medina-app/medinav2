@@ -2,6 +2,7 @@
 
 import { Menu } from '@base-ui/react'
 import { logoutAction } from '@/app/[slug]/actions'
+import { ThemeToggle } from './theme-toggle'
 
 interface UserMenuProps {
   email: string | undefined
@@ -57,6 +58,8 @@ export function UserMenu({ email }: UserMenuProps) {
             >
               {email}
             </div>
+
+            <ThemeToggle />
 
             <form action={logoutAction}>
               <Menu.Item
