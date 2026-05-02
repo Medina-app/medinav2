@@ -51,7 +51,7 @@ export function ClinicSwitcher({ clinics, current }: ClinicSwitcherProps) {
         >
           <Popover.Popup
             style={{
-              background: 'white',
+              background: 'var(--luma-bg-card)',
               border: '1px solid var(--luma-border)',
               borderRadius: 'var(--luma-radius-sm)',
               boxShadow: 'var(--luma-shadow-hover)',

@@ -38,7 +38,7 @@ export function UserMenu({ email }: UserMenuProps) {
           <Menu.Popup
             style={{
               minWidth: 200,
-              background: 'white',
+              background: 'var(--luma-bg-card)',
               border: '1px solid var(--luma-border)',
               borderRadius: 'var(--luma-radius-md)',
               boxShadow: 'var(--luma-shadow-hover)',
