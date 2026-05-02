@@ -34,12 +34,13 @@ export async function assertTenantAccess(
 
 export async function listUserClinics(supabase: SupabaseClient): Promise<ClinicSummary[]> {
   // RLS on clinic_members: user_id = auth.uid()
-  // !inner JOIN ensures clinics.deleted_at IS NULL rows are omitted
+  // !inner JOIN drops clinic_members rows whose related clinics row is missing
   const { data, error } = await supabase
     .from('clinic_members')
     .select('role, clinics!inner(id, slug, name)');
 
-  if (error || !data) return [];
+  if (error) throw error;
+  if (!data || data.length === 0) return [];
 
   return (data as unknown as Array<{ role: string; clinics: { id: string; slug: string; name: string } }>).map(
     ({ role, clinics }) => ({
