@@ -16,4 +16,8 @@ describe('isNavActive', () => {
   it('never marks a sibling route as active', () => {
     expect(isNavActive('/sao-lucas/patients', '/sao-lucas/pipeline', false)).toBe(false)
   })
+
+  it('exact=false with root slug matches all sub-routes — use exact=true for root', () => {
+    expect(isNavActive('/sao-lucas/inbox', '/sao-lucas', false)).toBe(true)
+  })
 })
