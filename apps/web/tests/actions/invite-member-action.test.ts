@@ -31,6 +31,7 @@ beforeEach(() => {
   vi.mocked(getSupabaseAdminClient).mockReturnValue({
     auth: { admin: { listUsers: mockListUsers } },
   } as any)
+  mockInsert.mockResolvedValue({ error: null })
   mockListUsers.mockResolvedValue({
     data: { users: [{ id: 'u2', email: 'new@test.com', user_metadata: {} }] },
     error: null,
