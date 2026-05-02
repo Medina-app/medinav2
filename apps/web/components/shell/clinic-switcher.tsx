@@ -35,6 +35,7 @@ export function ClinicSwitcher({ clinics, current }: ClinicSwitcherProps) {
           fill="none"
           stroke="currentColor"
           strokeWidth={2}
+          aria-hidden={true}
           style={{ opacity: 0.5, width: 14, height: 14, flexShrink: 0 }}
         >
           <polyline points="6 9 12 15 18 9" />
@@ -59,6 +60,7 @@ export function ClinicSwitcher({ clinics, current }: ClinicSwitcherProps) {
           >
             {clinics.map((c) => (
               <button
+                type="button"
                 key={c.id}
                 onClick={() => {
                   setOpen(false)
