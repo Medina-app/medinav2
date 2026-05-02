@@ -1,3 +1,4 @@
+import { cache } from 'react';
 import { headers } from 'next/headers';
 import type { SupabaseClient } from '@supabase/supabase-js';
 import { getSupabaseServerClient } from './supabase/server.js';
@@ -52,7 +53,7 @@ export async function listUserClinics(supabase: SupabaseClient): Promise<ClinicS
   );
 }
 
-export async function getTenantContext(): Promise<TenantContext> {
+export const getTenantContext = cache(async (): Promise<TenantContext> => {
   const headerStore = await headers();
   const slug = headerStore.get('x-tenant-slug');
   if (!slug) throw new NoSessionError();
@@ -72,4 +73,4 @@ export async function getTenantContext(): Promise<TenantContext> {
     clinicName: clinic.name,
     role: clinic.role,
   };
-}
+})
