@@ -52,9 +52,9 @@ export async function middleware(request: NextRequest) {
       const requestHeaders = new Headers(request.headers);
       requestHeaders.set('x-tenant-slug', firstSegment);
       const tenantResponse = NextResponse.next({ request: { headers: requestHeaders } });
-      // Copy the refreshed auth cookies onto the new response
-      response.cookies.getAll().forEach((cookie) => {
-        tenantResponse.cookies.set(cookie.name, cookie.value, { path: cookie.path });
+      // Copy refreshed auth cookies with all attributes (httpOnly, secure, sameSite, etc.)
+      response.cookies.getAll().forEach(({ name, value, ...options }) => {
+        tenantResponse.cookies.set(name, value, options);
       });
       return tenantResponse;
     } catch (error) {
