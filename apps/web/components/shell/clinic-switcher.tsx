@@ -27,7 +27,7 @@ export function ClinicSwitcher({ clinics, current }: ClinicSwitcherProps) {
         <div className="clinic-info">
           <div className="clinic-name">{current.name}</div>
           <div className="clinic-plan">
-            {current.role === 'owner' ? 'Proprietário' : 'Membro'}
+            {current.role === 'owner' ? 'Proprietário' : current.role === 'admin' ? 'Administrador' : 'Membro'}
           </div>
         </div>
         <svg
