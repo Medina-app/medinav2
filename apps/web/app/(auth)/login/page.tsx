@@ -19,7 +19,7 @@ export default function LoginPage() {
 
   return (
     <div
-      className="bg-white rounded-[12px] p-8"
+      className="auth-card rounded-[12px] p-8"
       style={{ border: '1px solid var(--luma-border)', boxShadow: 'var(--luma-shadow-hero)' }}
     >
       <div className="mb-6">

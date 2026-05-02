@@ -63,6 +63,7 @@ export function UserMenu({ email }: UserMenuProps) {
 
             <form action={logoutAction}>
               <Menu.Item
+                nativeButton
                 render={
                   <button
                     type="submit"

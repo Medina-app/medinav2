@@ -336,7 +336,7 @@ h4 {
     margin-bottom: 24px;
     cursor: pointer;
     transition: all 0.15s;
-    background: white;
+    background: var(--luma-bg-card);
 }
 
 .clinic-switcher:hover {
@@ -478,7 +478,7 @@ h4 {
     letter-spacing: -0.005em;
     border-radius: 8px;
     border: 1px solid var(--luma-border);
-    background: white;
+    background: var(--luma-bg-card);
     color: var(--luma-text-primary);
     cursor: pointer;
     transition: all 0.12s;
@@ -832,6 +832,13 @@ h4 {
     flex-shrink: 0;
 }
 
+/* ═══ AUTH CARD — glass effect, adapta light/dark ═══ */
+.auth-card {
+    background: rgba(255, 255, 255, 0.85);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+}
+
 /* ═══════════════════════════════════════════════
    DARK MODE — overrides Luma tokens
    ═══════════════════════════════════════════════ */
@@ -867,4 +874,11 @@ h4 {
 
 .dark .topbar {
     background: rgba(10, 10, 10, 0.7);
+}
+
+/* Auth card em dark: glass escuro */
+.dark .auth-card {
+    background: rgba(20, 20, 20, 0.7);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
 }
