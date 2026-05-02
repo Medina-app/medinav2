@@ -150,7 +150,46 @@ export function getRlsClient(
   };
 }
 
+export async function createTestConversation(
+  sql: postgres.Sql,
+  clinicId: string,
+  integrationId: string,
+  opts: { externalId?: string } = {},
+): Promise<{ id: string; clinic_id: string }> {
+  const externalId = opts.externalId ?? `+5511${Date.now().toString().slice(-9)}`;
+  const rows = await sql<{ id: string; clinic_id: string }[]>`
+    INSERT INTO conversations (clinic_id, integration_id, channel, external_id)
+    VALUES (${clinicId}, ${integrationId}, 'whatsapp', ${externalId})
+    RETURNING id, clinic_id
+  `;
+  const row = rows[0];
+  if (!row) throw new Error('createTestConversation: no row returned');
+  return row;
+}
+
+export async function createTestMessage(
+  sql: postgres.Sql,
+  conversationId: string,
+  clinicId: string,
+  opts: { content?: string; direction?: string } = {},
+): Promise<{ id: string }> {
+  const content = opts.content ?? `msg-${Date.now()}`;
+  const direction = opts.direction ?? 'inbound';
+  const senderType = direction === 'inbound' ? 'patient' : 'ai';
+  const rows = await sql<{ id: string }[]>`
+    INSERT INTO messages (conversation_id, clinic_id, direction, sender_type, content_type, content)
+    VALUES (${conversationId}, ${clinicId}, ${direction}, ${senderType}, 'text', ${content})
+    RETURNING id
+  `;
+  const row = rows[0];
+  if (!row) throw new Error('createTestMessage: no row returned');
+  return row;
+}
+
 export async function cleanupAll(sql: postgres.Sql): Promise<void> {
+  // Tables may not exist yet during TDD RED phase — suppress "relation does not exist".
+  await sql`DELETE FROM messages`.catch(() => null);
+  await sql`DELETE FROM conversations`.catch(() => null);
   // Two-step: mark as deleted (fires audit trigger), then actually delete.
   // The trigger only fires WHEN (OLD.deleted_at IS NULL), so the second DELETE is safe.
   await sql`UPDATE patients SET deleted_at = NOW() WHERE deleted_at IS NULL`;
