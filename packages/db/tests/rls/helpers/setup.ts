@@ -9,6 +9,8 @@ dotenv.config({ path: resolve(__dirname, '../../../../../apps/web/.env.local') }
 const DATABASE_URL = process.env['DATABASE_URL'];
 if (!DATABASE_URL) throw new Error('DATABASE_URL not set in apps/web/.env.local');
 
+export const TEST_ENCRYPTION_KEY = 'test-encryption-key-medina-2025';
+
 export function getServiceClient(): postgres.Sql {
   return postgres(DATABASE_URL!, { max: 3 });
 }
@@ -70,6 +72,41 @@ export async function addUserToClinic(
 }
 
 /**
+ * Creates a test integration via service role (bypasses RLS).
+ * Encrypts the given credentials with TEST_ENCRYPTION_KEY.
+ */
+export async function createTestIntegration(
+  sql: postgres.Sql,
+  clinicId: string,
+  opts: {
+    type?: string;
+    provider?: string;
+    name?: string;
+    plainCredentials?: string;
+  } = {},
+): Promise<{ id: string; clinic_id: string; webhook_path: string }> {
+  const type = opts.type ?? 'whatsapp';
+  const provider = opts.provider ?? 'cloud_api';
+  const name = opts.name ?? `Test ${type} ${Date.now()}`;
+  const plainCredentials = opts.plainCredentials ?? '{"token":"test-secret-123"}';
+
+  const rows = await sql<{ id: string; clinic_id: string; webhook_path: string }[]>`
+    INSERT INTO clinic_integrations (clinic_id, type, provider, name, encrypted_credentials)
+    VALUES (
+      ${clinicId},
+      ${type},
+      ${provider},
+      ${name},
+      encrypt_credential(${plainCredentials}, ${TEST_ENCRYPTION_KEY})
+    )
+    RETURNING id, clinic_id, webhook_path
+  `;
+  const row = rows[0];
+  if (!row) throw new Error('createTestIntegration: no row returned');
+  return row;
+}
+
+/**
  * Returns a client that executes queries as the given user with RLS enforced.
  * Uses SET LOCAL inside a transaction so role + JWT claims are scoped to
  * that transaction only and do not leak between tests.
@@ -97,6 +134,13 @@ export function getRlsClient(
 }
 
 export async function cleanupAll(sql: postgres.Sql): Promise<void> {
+  // Two-step: mark as deleted (fires audit trigger), then actually delete.
+  // The trigger only fires WHEN (OLD.deleted_at IS NULL), so the second DELETE is safe.
+  await sql`UPDATE clinic_integrations SET deleted_at = NOW() WHERE deleted_at IS NULL`;
+  await sql`DELETE FROM clinic_integrations`;
+  // Delete audit_logs AFTER integrations: the soft-delete UPDATE above fires the audit
+  // trigger and creates new rows; deleting audit_logs first would leave orphans that
+  // block the clinics DELETE via FK constraint.
   await sql`DELETE FROM audit_logs`;
   await sql`DELETE FROM clinic_members`;
   await sql`DELETE FROM clinics`;

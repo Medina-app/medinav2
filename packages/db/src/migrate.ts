@@ -16,8 +16,10 @@ if (!DATABASE_URL) {
 const sql = postgres(DATABASE_URL);
 const migrationsDir = resolve(__dirname, '../migrations');
 
+const fromArg = process.argv.find((a) => a.startsWith('--from='))?.split('=')[1];
+
 const files = readdirSync(migrationsDir)
-  .filter((f) => f.endsWith('.sql'))
+  .filter((f) => f.endsWith('.sql') && (!fromArg || f >= fromArg))
   .sort();
 
 for (const file of files) {
