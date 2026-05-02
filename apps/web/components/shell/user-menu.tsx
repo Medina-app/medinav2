@@ -59,23 +59,32 @@ export function UserMenu({ email }: UserMenuProps) {
             </div>
 
             <form action={logoutAction}>
-              <button
-                type="submit"
+              <Menu.Item
+                render={
+                  <button
+                    type="submit"
+                    style={{
+                      width: '100%',
+                      border: 'none',
+                      background: 'none',
+                      cursor: 'pointer',
+                      fontFamily: 'inherit',
+                    }}
+                  />
+                }
                 style={{
                   width: '100%',
                   padding: '8px 12px',
                   textAlign: 'left',
-                  background: 'none',
-                  border: 'none',
-                  cursor: 'pointer',
                   fontSize: '13.5px',
                   color: 'var(--luma-text-primary)',
-                  fontFamily: 'inherit',
                   letterSpacing: '-0.005em',
+                  cursor: 'pointer',
+                  outline: 'none',
                 }}
               >
                 Sair
-              </button>
+              </Menu.Item>
             </form>
           </Menu.Popup>
         </Menu.Positioner>
