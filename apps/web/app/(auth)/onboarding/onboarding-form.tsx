@@ -13,8 +13,8 @@ function toSlug(name: string): string {
     .normalize('NFD')
     .replace(/[̀-ͯ]/g, '')
     .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
     .slice(0, 50)
+    .replace(/^-+|-+$/g, '')
 }
 
 export function OnboardingForm() {
