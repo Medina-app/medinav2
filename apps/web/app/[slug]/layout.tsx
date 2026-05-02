@@ -1,4 +1,7 @@
-import { getTenantContext, listUserClinics, getSupabaseServerClient } from '@medina/auth'
+import { cache } from 'react'
+import { getTenantContext as _getTenantContext, listUserClinics, getSupabaseServerClient } from '@medina/auth'
+
+const getTenantContext = cache(_getTenantContext)
 import type { ClinicSummary } from '@medina/auth'
 import { Sidebar } from '@/components/shell/sidebar'
 import { Topbar } from '@/components/shell/topbar'

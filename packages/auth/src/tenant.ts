@@ -1,9 +1,8 @@
-import { cache } from 'react';
 import { headers } from 'next/headers';
 import type { SupabaseClient } from '@supabase/supabase-js';
-import { getSupabaseServerClient } from './supabase/server.js';
-import { TenantAccessDeniedError, NoSessionError } from './errors.js';
-import type { TenantContext, ClinicSummary, ClinicRole } from './types.js';
+import { getSupabaseServerClient } from './supabase/server';
+import { TenantAccessDeniedError, NoSessionError } from './errors';
+import type { TenantContext, ClinicSummary, ClinicRole } from './types';
 
 export async function assertTenantAccess(
   supabase: SupabaseClient,
@@ -53,7 +52,7 @@ export async function listUserClinics(supabase: SupabaseClient): Promise<ClinicS
   );
 }
 
-export const getTenantContext = cache(async (): Promise<TenantContext> => {
+export async function getTenantContext(): Promise<TenantContext> {
   const headerStore = await headers();
   const slug = headerStore.get('x-tenant-slug');
   if (!slug) throw new NoSessionError();
@@ -73,4 +72,4 @@ export const getTenantContext = cache(async (): Promise<TenantContext> => {
     clinicName: clinic.name,
     role: clinic.role,
   };
-})
+}
