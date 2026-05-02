@@ -106,6 +106,23 @@ export async function createTestIntegration(
   return row;
 }
 
+export async function createTestPatient(
+  sql: postgres.Sql,
+  clinicId: string,
+  opts: { phone?: string; fullName?: string } = {},
+): Promise<{ id: string; clinic_id: string }> {
+  const phone = opts.phone ?? `+5511${Date.now().toString().slice(-9)}`;
+  const fullName = opts.fullName ?? `Patient ${Date.now()}`;
+  const rows = await sql<{ id: string; clinic_id: string }[]>`
+    INSERT INTO patients (clinic_id, full_name, phone)
+    VALUES (${clinicId}, ${fullName}, ${phone})
+    RETURNING id, clinic_id
+  `;
+  const row = rows[0];
+  if (!row) throw new Error('createTestPatient: no row returned');
+  return row;
+}
+
 /**
  * Returns a client that executes queries as the given user with RLS enforced.
  * Uses SET LOCAL inside a transaction so role + JWT claims are scoped to
@@ -136,6 +153,8 @@ export function getRlsClient(
 export async function cleanupAll(sql: postgres.Sql): Promise<void> {
   // Two-step: mark as deleted (fires audit trigger), then actually delete.
   // The trigger only fires WHEN (OLD.deleted_at IS NULL), so the second DELETE is safe.
+  await sql`UPDATE patients SET deleted_at = NOW() WHERE deleted_at IS NULL`;
+  await sql`DELETE FROM patients`;
   await sql`UPDATE clinic_integrations SET deleted_at = NOW() WHERE deleted_at IS NULL`;
   await sql`DELETE FROM clinic_integrations`;
   // Delete audit_logs AFTER integrations: the soft-delete UPDATE above fires the audit
