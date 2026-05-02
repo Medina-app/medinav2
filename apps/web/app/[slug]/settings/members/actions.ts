@@ -36,13 +36,14 @@ export async function inviteMemberAction(input: unknown): Promise<ActionResult> 
   }
 
   const supabase = await getSupabaseServerClient()
+  // invited_by and invited_at are added in migration 0003; cast needed until types regenerated
   const { error } = await supabase.from('clinic_members').insert({
     clinic_id: ctx.clinicId,
     user_id: target.id,
     role: parsed.data.role,
     invited_by: ctx.user.id,
     invited_at: new Date().toISOString(),
-  } as Parameters<ReturnType<typeof supabase.from>['insert']>[0])
+  } as unknown as Parameters<ReturnType<typeof supabase.from>['insert']>[0])
 
   if (error) {
     if (error.code === '23505') return { error: 'Esse usuário já é membro da clínica.' }
