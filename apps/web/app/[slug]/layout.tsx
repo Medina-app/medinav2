@@ -8,6 +8,8 @@ interface SlugLayoutProps {
   params: Promise<{ slug: string }>
 }
 
+// params is not destructured — the slug comes from getTenantContext()
+// which reads the x-tenant-slug header injected by middleware.
 export default async function SlugLayout({ children }: SlugLayoutProps) {
   const [context, supabase] = await Promise.all([
     getTenantContext(),
@@ -31,9 +33,7 @@ export default async function SlugLayout({ children }: SlugLayoutProps) {
         clinics={clinics}
         currentClinic={currentClinic}
       />
-      <div
-        style={{ display: 'flex', flexDirection: 'column', minHeight: '100vh', overflow: 'hidden' }}
-      >
+      <div className="app-content">
         <Topbar email={context.user.email} />
         <main className="main">{children}</main>
       </div>

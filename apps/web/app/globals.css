@@ -273,6 +273,14 @@ h4 {
     z-index: 2;
 }
 
+/* ═══ APP-CONTENT (right column) ═══ */
+.app-content {
+    display: flex;
+    flex-direction: column;
+    min-height: 100vh;
+    overflow: hidden;
+}
+
 /* ═══ SIDEBAR ═══ */
 .sidebar {
     border-right: 1px solid var(--luma-border);
