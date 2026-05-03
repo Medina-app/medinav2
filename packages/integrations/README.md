@@ -1,103 +1,64 @@
 # @medina/integrations
 
-Adapter pattern for external system integrations (PEP, WhatsApp, Cal.com, etc.).
+Webhook routing and adapter pattern for external integrations (PEP, WhatsApp, Cal.com, etc.).
 
-## Webhook Routing
-
-Inbound webhooks arrive at:
+## Webhook URL pattern
 
 ```
 POST /api/webhooks/{type}/{provider}/{clinic_id}
 ```
 
-Example: `POST /api/webhooks/whatsapp/cloud_api/a1b2c3d4-...`
+Example: `POST /api/webhooks/whatsapp/kapso/a1b2c3d4-...`
 
-The `webhook_path` column on `clinic_integrations` is a GENERATED STORED column
-that always equals this pattern. The Next.js route handler at
-`apps/web/app/api/webhooks/[type]/[provider]/[clinic_id]/route.ts` (to be created
-in a future issue) will:
+The `webhook_path` column on `clinic_integrations` is a GENERATED STORED column that always equals this pattern. The Next.js route at `apps/web/app/api/webhooks/[type]/[provider]/[clinicId]/route.ts` receives the request, looks up the integration row using `type + provider + clinic_id`, validates the HMAC signature, and dispatches to the registered adapter.
 
-1. Look up the integration row using `type`, `provider`, and `clinic_id`
-2. Load the `webhook_secret` from the row
-3. Validate the HMAC signature (see below)
-4. Dispatch to the correct adapter's `handle()` method
+## Creating a new adapter
 
-## HMAC Validation
+1. Create a package at `packages/integrations/{type}/{provider}/` with `package.json` (name: `@medina/integrations-{type}-{provider}`) and deps on `@medina/db` + `@medina/integrations-core`.
+2. Export a `const adapter: AdapterInterface` from `src/adapter.ts`. Set `type`, `provider`, `signatureHeader`, `handle`, and `healthCheck`.
+3. Register it in `apps/web/app/api/webhooks/[type]/[provider]/[clinicId]/route.ts` via `registry.register(adapter)`.
+4. Add `"packages/integrations/{type}/*"` glob to `pnpm-workspace.yaml` if a new type directory is needed.
+5. Write unit tests mocking `WebhookContext` — see `packages/integrations/core/tests/webhook-handler.test.ts` for the pattern.
 
-Each integration has a `webhook_secret` (random string set at creation time).
-To validate an inbound webhook:
+## HMAC signature validation
 
-```typescript
-import { createHmac, timingSafeEqual } from 'crypto';
+Each provider sends its HMAC signature in a different HTTP header. Set `signatureHeader` on the adapter accordingly:
 
-function validateWebhookSignature(
-  payload: Buffer,
-  receivedSig: string,
-  secret: string,
-): boolean {
-  const expected = createHmac('sha256', secret)
-    .update(payload)
-    .digest('hex');
-  const expectedBuf = Buffer.from(expected);
-  const receivedBuf = Buffer.from(receivedSig);
-  if (expectedBuf.length !== receivedBuf.length) return false;
-  return timingSafeEqual(expectedBuf, receivedBuf);
-}
-```
+| Provider | Header |
+|---|---|
+| Kapso (WhatsApp) | `x-kapso-signature` |
+| Cal.com | `x-cal-signature-256` |
+| iClinic (PEP) | `x-iclinic-signature` |
+| Generic | `x-medina-signature` |
 
-The signature header name is provider-specific:
-- WhatsApp Cloud API: `X-Hub-Signature-256` (prefix `sha256=`)
-- iClinic: `X-iClinic-Signature`
-- Generic: `X-Medina-Signature`
+`verifyHmacSignature(secret, rawBody, signature)` in `@medina/integrations-core` handles the `sha256=` prefix and uses `timingSafeEqual` for timing-safe comparison.
 
-## Reading Credentials
+## Webhook handler behavior
 
-Adapters receive an `AdapterContext` with a `getCredentials()` helper. Internally
-it calls:
+| Condition | HTTP response |
+|---|---|
+| Integration not found | 404 |
+| Integration disabled | 400 |
+| Type/provider mismatch | 400 |
+| Invalid HMAC signature | 401 |
+| Adapter throws (any error) | **200** — logged, provider must not retry |
+| Success | 200 |
 
-```sql
-SELECT get_integration_credential($1::uuid)
-```
+The 200-on-adapter-error rule (idempotência) prevents webhook providers from retrying deliveries for transient internal failures. Errors are logged with full structured context for debugging.
 
-This SECURITY DEFINER function validates the caller has `admin` or `owner` role
-in the integration's clinic before decrypting with `app.encryption_key`.
+## Testing an adapter locally
 
-The application server must set the encryption key before calling:
+1. Start `pnpm dev` in `apps/web`.
+2. Expose localhost with ngrok: `ngrok http 3000`.
+3. Set the clinic's webhook URL in the provider's dashboard to `https://{ngrok-url}/api/webhooks/{type}/{provider}/{clinic_id}`.
+4. Send a test payload from the provider's dashboard.
 
-```typescript
-await sql`SELECT set_config('app.encryption_key', ${process.env.ENCRYPTION_KEY}, TRUE)`;
-const creds = JSON.parse(await context.getCredentials());
-```
+## Package overview
 
-**Key rotation**: Update `app.encryption_key` in Supabase → Database → Configuration,
-then run a one-time migration that re-encrypts all `encrypted_credentials` rows with
-the new key.
-
-## Adapter Contract
-
-```typescript
-// packages/integrations/src/adapters/{type}/{provider}.ts
-import type { IntegrationAdapter } from '@medina/integrations';
-
-export const adapter: IntegrationAdapter = {
-  async handle(payload, context) { /* ... */ },
-  async sync(context) { /* ... */ },
-  async healthCheck(context) { /* ... */ },
-};
-```
-
-## Directory Structure (future)
-
-```
-packages/integrations/
-  src/
-    types.ts            ← adapter interface (exists)
-    adapters/
-      whatsapp/
-        cloud_api.ts    ← WhatsApp Cloud API adapter
-      pep/
-        iclinic.ts      ← iClinic PEP adapter
-        feegow.ts
-      calcom/
-        cal.ts
-```
+| Package | Purpose |
+|---|---|
+| `@medina/integrations` | Original types (IntegrationAdapter, AdapterContext) — kept for backward compat |
+| `@medina/integrations-core` | Signature validation, adapter registry, webhook orchestrator |
+| `@medina/integrations-whatsapp-kapso` | Kapso WhatsApp adapter skeleton |
+| `@medina/integrations-calcom` | Cal.com adapter skeleton |
+| `@medina/integrations-pep-iclinic` | iClinic PEP placeholder |

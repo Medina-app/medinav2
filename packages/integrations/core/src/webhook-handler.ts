@@ -17,8 +17,8 @@ function createDefaultLookup(): LookupFn {
     process.env['SUPABASE_SERVICE_ROLE_KEY'] ?? '',
     { auth: { autoRefreshToken: false, persistSession: false } },
   )
-  return (type, provider, clinicId) =>
-    sb
+  return async (type, provider, clinicId) => {
+    const { data } = await sb
       .from('clinic_integrations')
       .select('*')
       .eq('type', type)
@@ -26,7 +26,8 @@ function createDefaultLookup(): LookupFn {
       .eq('clinic_id', clinicId)
       .is('deleted_at', null)
       .single()
-      .then(({ data }) => data as ClinicIntegration | null)
+    return data as ClinicIntegration | null
+  }
 }
 
 const j = (body: unknown, status: number) =>
