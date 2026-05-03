@@ -12,5 +12,6 @@ export default defineConfig({
       concurrent: false,
     },
     testTimeout: 30000,
+    hookTimeout: 30000,
   },
 });

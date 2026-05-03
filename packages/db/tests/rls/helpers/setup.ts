@@ -9,7 +9,7 @@ dotenv.config({ path: resolve(__dirname, '../../../../../apps/web/.env.local') }
 const DATABASE_URL = process.env['DATABASE_URL'];
 if (!DATABASE_URL) throw new Error('DATABASE_URL not set in apps/web/.env.local');
 
-export const TEST_ENCRYPTION_KEY = 'test-encryption-key-medina-2025';
+export { TEST_VAULT_KEY, ensureVaultMasterKey, getVaultMasterKey } from './vault-bootstrap.js';
 
 export function getServiceClient(): postgres.Sql {
   return postgres(DATABASE_URL!, { max: 3 });
@@ -73,7 +73,8 @@ export async function addUserToClinic(
 
 /**
  * Creates a test integration via service role (bypasses RLS).
- * Encrypts the given credentials with TEST_ENCRYPTION_KEY.
+ * Encrypts the given credentials using the master key from supabase_vault —
+ * caller must have run ensureVaultMasterKey() in beforeAll.
  */
 export async function createTestIntegration(
   sql: postgres.Sql,
@@ -97,7 +98,7 @@ export async function createTestIntegration(
       ${type},
       ${provider},
       ${name},
-      encrypt_credential(${plainCredentials}, ${TEST_ENCRYPTION_KEY})
+      encrypt_credential(${plainCredentials})
     )
     RETURNING id, clinic_id, webhook_path
   `;

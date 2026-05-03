@@ -5,13 +5,13 @@ import {
   createTestClinic,
   createTestPatient,
   createTestUser,
+  ensureVaultMasterKey,
   getRlsClient,
   getServiceClient,
-  TEST_ENCRYPTION_KEY,
 } from './helpers/setup.js';
 
 const sql = getServiceClient();
-beforeAll(async () => { await cleanupAll(sql); });
+beforeAll(async () => { await ensureVaultMasterKey(sql); await cleanupAll(sql); });
 afterAll(async () => { await cleanupAll(sql); await sql.end(); });
 
 describe('patients: cross-tenant isolation', () => {
@@ -84,11 +84,10 @@ describe('patients: CPF encryption', () => {
     const admin = await createTestUser(sql);
     await addUserToClinic(sql, clinic.id, admin.id, 'admin');
 
-    await sql`SELECT set_config('app.encryption_key', ${TEST_ENCRYPTION_KEY}, FALSE)`;
     await sql`
       INSERT INTO patients (clinic_id, full_name, phone, encrypted_cpf, cpf_hash)
       VALUES (${clinic.id}, 'Enc Test', '+5511900000003',
-              encrypt_cpf('123.456.789-00', ${TEST_ENCRYPTION_KEY}),
+              encrypt_cpf('123.456.789-00'),
               hash_cpf('123.456.789-00'))
     `;
 
@@ -108,11 +107,10 @@ describe('patients: CPF encryption', () => {
     const admin = await createTestUser(sql);
     await addUserToClinic(sql, clinic.id, admin.id, 'admin');
 
-    await sql`SELECT set_config('app.encryption_key', ${TEST_ENCRYPTION_KEY}, FALSE)`;
     const rows = await sql<{ id: string }[]>`
       INSERT INTO patients (clinic_id, full_name, phone, encrypted_cpf, cpf_hash)
       VALUES (${clinic.id}, 'Dec Test', '+5511900000004',
-              encrypt_cpf('987.654.321-00', ${TEST_ENCRYPTION_KEY}),
+              encrypt_cpf('987.654.321-00'),
               hash_cpf('987.654.321-00'))
       RETURNING id
     `;
@@ -131,11 +129,10 @@ describe('patients: CPF encryption', () => {
     const member = await createTestUser(sql);
     await addUserToClinic(sql, clinic.id, member.id, 'member');
 
-    await sql`SELECT set_config('app.encryption_key', ${TEST_ENCRYPTION_KEY}, FALSE)`;
     const rows = await sql<{ id: string }[]>`
       INSERT INTO patients (clinic_id, full_name, phone, encrypted_cpf, cpf_hash)
       VALUES (${clinic.id}, 'Deny Test', '+5511900000005',
-              encrypt_cpf('111.222.333-44', ${TEST_ENCRYPTION_KEY}),
+              encrypt_cpf('111.222.333-44'),
               hash_cpf('111.222.333-44'))
       RETURNING id
     `;

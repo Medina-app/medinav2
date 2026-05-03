@@ -1,11 +1,11 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
-  TEST_ENCRYPTION_KEY,
   addUserToClinic,
   cleanupAll,
   createTestClinic,
   createTestIntegration,
   createTestUser,
+  ensureVaultMasterKey,
   getRlsClient,
   getServiceClient,
 } from './helpers/setup.js';
@@ -13,6 +13,7 @@ import {
 const sql = getServiceClient();
 
 beforeAll(async () => {
+  await ensureVaultMasterKey(sql);
   await cleanupAll(sql);
 });
 
@@ -133,12 +134,11 @@ describe('clinic_integrations: encrypted_credentials', () => {
     const integration = await createTestIntegration(sql, clinic.id, { plainCredentials });
 
     const client = getRlsClient(sql, admin.id);
-    const rows = await client.query(async (tx) => {
-      await tx`SELECT set_config('app.encryption_key', ${TEST_ENCRYPTION_KEY}, TRUE)`;
-      return tx<{ val: string }[]>`
+    const rows = await client.query((tx) =>
+      tx<{ val: string }[]>`
         SELECT get_integration_credential(${integration.id}::uuid) AS val
-      `;
-    });
+      `,
+    );
 
     expect(rows[0]?.val).toBe(plainCredentials);
   });
@@ -152,12 +152,11 @@ describe('clinic_integrations: encrypted_credentials', () => {
 
     const client = getRlsClient(sql, member.id);
     await expect(
-      client.query(async (tx) => {
-        await tx`SELECT set_config('app.encryption_key', ${TEST_ENCRYPTION_KEY}, TRUE)`;
-        return tx<{ val: string }[]>`
+      client.query((tx) =>
+        tx<{ val: string }[]>`
           SELECT get_integration_credential(${integration.id}::uuid) AS val
-        `;
-      }),
+        `,
+      ),
     ).rejects.toThrow('access denied');
   });
 });
