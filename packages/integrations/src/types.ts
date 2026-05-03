@@ -30,7 +30,7 @@ export interface AdapterContext {
   /**
    * Retrieve the decrypted credentials for this integration.
    * Calls `SELECT get_integration_credential($1)` internally.
-   * Only works when the calling session has app.encryption_key set.
+   * Reads master key from supabase_vault — no session config required.
    */
   getCredentials(): Promise<string>;
 }
