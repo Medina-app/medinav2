@@ -5,3 +5,6 @@ export * from './clinic-integrations.js';
 export * from './patients.js';
 export * from './conversations.js';
 export * from './messages.js';
+export * from './pipelines.js';
+export * from './pipeline-stages.js';
+export * from './deals.js';

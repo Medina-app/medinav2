@@ -186,8 +186,65 @@ export async function createTestMessage(
   return row;
 }
 
+export async function createTestPipeline(
+  sql: postgres.Sql,
+  clinicId: string,
+  opts: { name?: string; isDefault?: boolean } = {},
+): Promise<{ id: string; clinic_id: string }> {
+  const name = opts.name ?? `Pipeline ${Date.now()}`;
+  const rows = await sql<{ id: string; clinic_id: string }[]>`
+    INSERT INTO pipelines (clinic_id, name, is_default)
+    VALUES (${clinicId}, ${name}, ${opts.isDefault ?? false})
+    RETURNING id, clinic_id
+  `;
+  const row = rows[0];
+  if (!row) throw new Error('createTestPipeline: no row returned');
+  return row;
+}
+
+export async function createTestPipelineStage(
+  sql: postgres.Sql,
+  clinicId: string,
+  pipelineId: string,
+  opts: { name?: string; position?: number; stageType?: string } = {},
+): Promise<{ id: string; clinic_id: string }> {
+  const name = opts.name ?? `Stage ${Date.now()}`;
+  const position = opts.position ?? 0;
+  const stageType = opts.stageType ?? 'open';
+  const rows = await sql<{ id: string; clinic_id: string }[]>`
+    INSERT INTO pipeline_stages (clinic_id, pipeline_id, name, position, stage_type)
+    VALUES (${clinicId}, ${pipelineId}, ${name}, ${position}, ${stageType})
+    RETURNING id, clinic_id
+  `;
+  const row = rows[0];
+  if (!row) throw new Error('createTestPipelineStage: no row returned');
+  return row;
+}
+
+export async function createTestDeal(
+  sql: postgres.Sql,
+  clinicId: string,
+  pipelineId: string,
+  stageId: string,
+  opts: { title?: string; position?: number } = {},
+): Promise<{ id: string; clinic_id: string }> {
+  const title = opts.title ?? `Deal ${Date.now()}`;
+  const position = opts.position ?? 0;
+  const rows = await sql<{ id: string; clinic_id: string }[]>`
+    INSERT INTO deals (clinic_id, pipeline_id, stage_id, title, position)
+    VALUES (${clinicId}, ${pipelineId}, ${stageId}, ${title}, ${position})
+    RETURNING id, clinic_id
+  `;
+  const row = rows[0];
+  if (!row) throw new Error('createTestDeal: no row returned');
+  return row;
+}
+
 export async function cleanupAll(sql: postgres.Sql): Promise<void> {
   // Tables may not exist yet during TDD RED phase — suppress "relation does not exist".
+  await sql`DELETE FROM deals`.catch(() => null);
+  await sql`DELETE FROM pipeline_stages`.catch(() => null);
+  await sql`DELETE FROM pipelines`.catch(() => null);
   await sql`DELETE FROM messages`.catch(() => null);
   await sql`DELETE FROM conversations`.catch(() => null);
   // Two-step: mark as deleted (fires audit trigger), then actually delete.
