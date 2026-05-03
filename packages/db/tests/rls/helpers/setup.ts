@@ -240,8 +240,56 @@ export async function createTestDeal(
   return row;
 }
 
+export async function createTestDoctor(
+  sql: postgres.Sql,
+  clinicId: string,
+  opts: { fullName?: string } = {},
+): Promise<{ id: string; clinic_id: string }> {
+  const fullName = opts.fullName ?? `Doctor ${Date.now()}`;
+  const rows = await sql<{ id: string; clinic_id: string }[]>`
+    INSERT INTO doctors (clinic_id, full_name)
+    VALUES (${clinicId}, ${fullName})
+    RETURNING id, clinic_id
+  `;
+  const row = rows[0];
+  if (!row) throw new Error('createTestDoctor: no row returned');
+  return row;
+}
+
+export async function createTestAppointment(
+  sql: postgres.Sql,
+  clinicId: string,
+  doctorId: string,
+  opts: {
+    patientId?: string | null;
+    conversationId?: string | null;
+    dealId?: string | null;
+    status?: string;
+    startAt?: string;
+    endAt?: string;
+  } = {},
+): Promise<{ id: string; clinic_id: string }> {
+  const startAt = opts.startAt ?? new Date(Date.now() + 86400000).toISOString();
+  const endAt = opts.endAt ?? new Date(Date.now() + 86400000 + 3600000).toISOString();
+  const status = opts.status ?? 'scheduled';
+  const rows = await sql<{ id: string; clinic_id: string }[]>`
+    INSERT INTO appointments (clinic_id, doctor_id, status, start_at, end_at, patient_id, conversation_id, deal_id)
+    VALUES (
+      ${clinicId}, ${doctorId}, ${status}, ${startAt}, ${endAt},
+      ${opts.patientId ?? null}, ${opts.conversationId ?? null}, ${opts.dealId ?? null}
+    )
+    RETURNING id, clinic_id
+  `;
+  const row = rows[0];
+  if (!row) throw new Error('createTestAppointment: no row returned');
+  return row;
+}
+
 export async function cleanupAll(sql: postgres.Sql): Promise<void> {
   // Tables may not exist yet during TDD RED phase — suppress "relation does not exist".
+  await sql`DELETE FROM appointment_reminders`.catch(() => null);
+  await sql`DELETE FROM appointments`.catch(() => null);
+  await sql`DELETE FROM doctors`.catch(() => null);
   await sql`DELETE FROM deals`.catch(() => null);
   await sql`DELETE FROM pipeline_stages`.catch(() => null);
   await sql`DELETE FROM pipelines`.catch(() => null);

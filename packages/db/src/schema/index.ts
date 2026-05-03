@@ -8,3 +8,6 @@ export * from './messages.js';
 export * from './pipelines.js';
 export * from './pipeline-stages.js';
 export * from './deals.js';
+export * from './doctors.js';
+export * from './appointments.js';
+export * from './appointment-reminders.js';
