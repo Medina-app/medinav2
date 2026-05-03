@@ -1,0 +1,23 @@
+# Medina CODEOWNERS
+# Toda PR aciona auto-request de review pros owners do path
+
+# Áreas compartilhadas — qualquer um aprova mas avisa antes de mexer
+/packages/db/                @ipadobronx @Dxgabriel111
+/packages/auth/              @ipadobronx @Dxgabriel111
+/packages/types/             @ipadobronx @Dxgabriel111
+/packages/ui/                @ipadobronx @Dxgabriel111
+/packages/lib/               @ipadobronx @Dxgabriel111
+/packages/integrations/core/ @ipadobronx @Dxgabriel111
+/.github/                    @ipadobronx @Dxgabriel111
+/CLAUDE.md                   @ipadobronx @Dxgabriel111
+
+# Módulo Gabriel (você) — chat + IA
+/packages/chat/                          @ipadobronx
+/packages/ai/                            @ipadobronx
+/packages/integrations/whatsapp/         @ipadobronx
+
+# Módulo Amigo — pipeline + scheduling
+/packages/pipeline/                      @Dxgabriel111
+/packages/scheduling/                    @Dxgabriel111
+/packages/integrations/pep/              @Dxgabriel111
+/packages/integrations/calcom/           @Dxgabriel111
