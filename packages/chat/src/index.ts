@@ -6,3 +6,10 @@ export type {
 } from './types.js';
 
 export { lookupOrCreatePatientByPhone } from './patients.js';
+export {
+  getOrCreateConversation,
+  addMessage,
+  updateMessageDeliveryStatus,
+  type GetOrCreateConversationArgs,
+  type AddMessageArgs,
+} from './conversations.js';

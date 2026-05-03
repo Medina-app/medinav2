@@ -53,3 +53,18 @@ export async function createTestPatient(
   if (error) throw new Error(`createTestPatient: ${error.message}`);
   return data as { id: string; clinic_id: string; phone: string };
 }
+
+export async function createTestIntegration(
+  sb: SupabaseClient,
+  clinicId: string,
+  opts: { type?: string; provider?: string; name?: string } = {},
+): Promise<{ id: string; clinic_id: string }> {
+  const type = opts.type ?? 'whatsapp';
+  const provider = opts.provider ?? 'kapso';
+  const name = opts.name ?? `Test ${type} ${Date.now()}`;
+  const { data, error } = await sb.from('clinic_integrations')
+    .insert({ clinic_id: clinicId, type, provider, name, status: 'configuring' })
+    .select('id, clinic_id').single();
+  if (error) throw new Error(`createTestIntegration: ${error.message}`);
+  return data as { id: string; clinic_id: string };
+}
