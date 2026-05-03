@@ -26,9 +26,21 @@ importers:
       '@medina/auth':
         specifier: workspace:*
         version: link:../../packages/auth
+      '@medina/chat':
+        specifier: workspace:*
+        version: link:../../packages/chat
+      '@medina/integrations-calcom':
+        specifier: workspace:*
+        version: link:../../packages/integrations/calcom
       '@medina/integrations-core':
         specifier: workspace:*
         version: link:../../packages/integrations/core
+      '@medina/integrations-whatsapp-kapso':
+        specifier: workspace:*
+        version: link:../../packages/integrations/whatsapp/kapso
+      '@supabase/supabase-js':
+        specifier: ^2
+        version: 2.105.1
       class-variance-authority:
         specifier: ^0.7.1
         version: 0.7.1
