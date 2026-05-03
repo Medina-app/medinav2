@@ -285,6 +285,49 @@ export async function createTestAppointment(
   return row;
 }
 
+export async function createTestAgentConfig(
+  sql: postgres.Sql,
+  clinicId: string,
+  opts: {
+    name?: string;
+    status?: string;
+    systemPrompt?: string;
+    model?: string;
+  } = {},
+): Promise<{ id: string; clinic_id: string; name: string; version: number; status: string }> {
+  const name = opts.name ?? `agent-${Date.now()}`;
+  const status = opts.status ?? 'draft';
+  const systemPrompt = opts.systemPrompt ?? 'You are a helpful assistant.';
+  const model = opts.model ?? 'claude-haiku-4-5';
+  const rows = await sql<
+    { id: string; clinic_id: string; name: string; version: number; status: string }[]
+  >`
+    INSERT INTO agent_configs (clinic_id, name, status, system_prompt, model)
+    VALUES (${clinicId}, ${name}, ${status}, ${systemPrompt}, ${model})
+    RETURNING id, clinic_id, name, version, status
+  `;
+  const row = rows[0];
+  if (!row) throw new Error('createTestAgentConfig: no row returned');
+  return row;
+}
+
+export async function createTestKnowledgeDocument(
+  sql: postgres.Sql,
+  clinicId: string,
+  opts: { title?: string; sourceType?: string } = {},
+): Promise<{ id: string; clinic_id: string }> {
+  const title = opts.title ?? `Doc ${Date.now()}`;
+  const sourceType = opts.sourceType ?? 'manual';
+  const rows = await sql<{ id: string; clinic_id: string }[]>`
+    INSERT INTO knowledge_documents (clinic_id, title, source_type)
+    VALUES (${clinicId}, ${title}, ${sourceType})
+    RETURNING id, clinic_id
+  `;
+  const row = rows[0];
+  if (!row) throw new Error('createTestKnowledgeDocument: no row returned');
+  return row;
+}
+
 export async function cleanupAll(sql: postgres.Sql): Promise<void> {
   // Tables may not exist yet during TDD RED phase — suppress "relation does not exist".
   await sql`DELETE FROM appointment_reminders`.catch(() => null);
@@ -295,6 +338,9 @@ export async function cleanupAll(sql: postgres.Sql): Promise<void> {
   await sql`DELETE FROM pipelines`.catch(() => null);
   await sql`DELETE FROM messages`.catch(() => null);
   await sql`DELETE FROM conversations`.catch(() => null);
+  await sql`DELETE FROM knowledge_chunks`.catch(() => null);
+  await sql`DELETE FROM knowledge_documents`.catch(() => null);
+  await sql`DELETE FROM agent_configs`.catch(() => null);
   // Two-step: mark as deleted (fires audit trigger), then actually delete.
   // The trigger only fires WHEN (OLD.deleted_at IS NULL), so the second DELETE is safe.
   await sql`UPDATE patients SET deleted_at = NOW() WHERE deleted_at IS NULL`;

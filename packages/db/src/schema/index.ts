@@ -11,3 +11,6 @@ export * from './deals.js';
 export * from './doctors.js';
 export * from './appointments.js';
 export * from './appointment-reminders.js';
+export * from './agent-configs.js';
+export * from './knowledge-documents.js';
+export * from './knowledge-chunks.js';
