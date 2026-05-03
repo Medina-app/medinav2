@@ -9,16 +9,15 @@ export const clinicMembers = pgTable(
     clinicId: uuid('clinic_id').notNull().references(() => clinics.id),
     userId: uuid('user_id').notNull(),
     role: text('role').notNull().default('member'),
+    invitedBy: uuid('invited_by'),
+    invitedAt: timestamp('invited_at', { withTimezone: true }),
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
   },
   (t) => [
     unique().on(t.clinicId, t.userId),
-    check(
-      'clinic_members_role_check',
-      sql`${t.role} IN ('owner','admin','member')`,
-    ),
+    check('clinic_members_role_check', sql`${t.role} IN ('owner','admin','member')`),
   ],
 );
 
