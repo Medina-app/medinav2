@@ -1,0 +1,16 @@
+{
+  "name": "@medina/integrations-whatsapp-kapso",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/adapter.ts" },
+  "scripts": { "typecheck": "tsc --noEmit" },
+  "dependencies": {
+    "@medina/db": "workspace:*",
+    "@medina/integrations-core": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "typescript": "^5"
+  }
+}

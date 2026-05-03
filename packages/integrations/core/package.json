@@ -1,0 +1,20 @@
+{
+  "name": "@medina/integrations-core",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts" },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@medina/db": "workspace:*",
+    "@supabase/supabase-js": "^2"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "typescript": "^5",
+    "vitest": "^3.1.3"
+  }
+}
