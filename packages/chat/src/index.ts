@@ -13,3 +13,8 @@ export {
   type GetOrCreateConversationArgs,
   type AddMessageArgs,
 } from './conversations.js';
+export {
+  listConversations,
+  getConversationWithMessages,
+  type ListConversationsArgs,
+} from './inbox.js';
