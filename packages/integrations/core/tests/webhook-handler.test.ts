@@ -86,6 +86,40 @@ describe('handleWebhook', () => {
     expect(res.status).toBe(401)
   })
 
+  it('returns 403 when integration is active but has no webhook secret', async () => {
+    registry.register(makeAdapter())
+    const res = await handleWebhook(
+      req('{}'),
+      PARAMS,
+      vi.fn().mockResolvedValue(makeInt({ webhookSecret: null, status: 'active' })),
+    )
+    expect(res.status).toBe(403)
+    expect((await res.json() as { error: string }).error).toBe('secret_not_configured')
+  })
+
+  it('returns 403 when integration is in error state but has no webhook secret', async () => {
+    registry.register(makeAdapter())
+    const res = await handleWebhook(
+      req('{}'),
+      PARAMS,
+      vi.fn().mockResolvedValue(makeInt({ webhookSecret: null, status: 'error' })),
+    )
+    expect(res.status).toBe(403)
+  })
+
+  it('allows request without signature when integration is configuring', async () => {
+    const body = '{}'
+    const adapter = makeAdapter()
+    registry.register(adapter)
+    const res = await handleWebhook(
+      req(body),
+      PARAMS,
+      vi.fn().mockResolvedValue(makeInt({ webhookSecret: null, status: 'configuring' })),
+    )
+    expect(res.status).toBe(200)
+    expect(adapter.handle).toHaveBeenCalledOnce()
+  })
+
   it('dispatches to correct adapter when signature is valid', async () => {
     const body = '{"event":"msg"}'
     const adapter = makeAdapter()

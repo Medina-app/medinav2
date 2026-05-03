@@ -83,7 +83,17 @@ export async function handleWebhook(
   const adapter = registry.get(type, provider)
   const rawBody = await req.text()
 
-  if (integration.webhookSecret) {
+  if (integration.status !== 'configuring') {
+    if (!integration.webhookSecret) {
+      logger.warn({
+        ...lb,
+        action: 'validate_signature',
+        duration_ms: Date.now() - t0,
+        success: false,
+        error: 'secret_not_configured',
+      })
+      return j({ error: 'secret_not_configured' }, 403)
+    }
     const sig = req.headers.get(adapter.signatureHeader) ?? ''
     if (!verifyHmacSignature(integration.webhookSecret, rawBody, sig)) {
       logger.warn({
