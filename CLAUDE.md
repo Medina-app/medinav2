@@ -39,3 +39,9 @@ Tenant resolver via Supabase session + claim `clinic_id`. Zero cross-tenant data
 ## Skills Ativas (fundação)
 
 `writing-plans` · `frontend-design` · `verification-before-completion` · `test-driven-development`
+
+## Custom skill obrigatória pra schemas
+
+Quando criar/modificar migrations, trigger, policy ou função SQL: ATIVA schema-migration-checklist.
+Esse checklist captura patterns recorrentes identificados em auditoria.
+Skill em .claude/skills/schema-migration-checklist/SKILL.md.
