@@ -17,6 +17,9 @@ out
 # Claude Code
 .claude/settings.local.json
 
+# Git worktrees
+.worktrees/
+
 # OS
 .DS_Store
 Thumbs.db
