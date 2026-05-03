@@ -4,3 +4,5 @@ export type {
   ConversationListItem,
   ConversationWithMessages,
 } from './types.js';
+
+export { lookupOrCreatePatientByPhone } from './patients.js';
