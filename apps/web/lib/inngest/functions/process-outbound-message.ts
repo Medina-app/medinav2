@@ -191,7 +191,11 @@ async function decryptCredentialReal(
   sb: SupabaseClient,
   integrationId: string,
 ): Promise<{ api_key: string }> {
-  const { data, error } = await sb.rpc('get_integration_credential', {
+  // Worker uses the service_role-only variant (migration 0015) which skips
+  // the has_clinic_role check. The user-facing get_integration_credential
+  // would fail here because Inngest workers run with service_role JWT,
+  // making auth.uid()=NULL and tripping the role check.
+  const { data, error } = await sb.rpc('get_integration_credential_internal', {
     p_integration_id: integrationId,
   });
   if (error) throw new Error(`credential decrypt failed: ${error.message}`);
