@@ -4,8 +4,10 @@ import { useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import type { ConversationWithMessages } from '@medina/chat';
+import { toast } from 'sonner';
 import SendMessageForm from './send-message-form';
 import MessageBubble from './_components/MessageBubble';
+import { retryFailedMessageAction } from './retry-action';
 
 interface ConversationDetailProps {
   conversation: ConversationWithMessages;
@@ -46,6 +48,15 @@ export default function ConversationDetail({ conversation, clinicSlug }: Convers
     return () => clearInterval(id);
   }, [hasActive, router]);
 
+  async function handleRetry(messageId: string) {
+    const result = await retryFailedMessageAction({ messageId });
+    if ('error' in result && result.error) {
+      toast.error(result.error);
+      return;
+    }
+    toast.success('Reenfileirada.');
+  }
+
   const headerName = conversation.patient?.fullName ?? conversation.externalId;
   const phone = conversation.patient?.phone ?? conversation.externalId;
   const stateLabel = STATE_LABEL[conversation.state] ?? conversation.state;
@@ -78,7 +89,7 @@ export default function ConversationDetail({ conversation, clinicSlug }: Convers
         ) : (
           <ul className="flex flex-col gap-1.5">
             {conversation.messages.map((m) => (
-              <MessageBubble key={m.id} message={m} />
+              <MessageBubble key={m.id} message={m} onRetry={handleRetry} />
             ))}
           </ul>
         )}
