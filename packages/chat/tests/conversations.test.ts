@@ -3,14 +3,14 @@ import {
   getOrCreateConversation,
   addMessage,
   updateMessageDeliveryStatus,
-} from '../src/conversations.js';
+} from '../src/conversations';
 import {
   createTestClinic,
   createTestIntegration,
   createTestPatient,
   deleteTestClinic,
   getAdminSupabase,
-} from './helpers.js';
+} from './helpers';
 
 const sb = getAdminSupabase();
 const createdClinics: string[] = [];

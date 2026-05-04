@@ -1,5 +1,5 @@
-import { AdapterNotRegisteredError } from './errors.js'
-import type { AdapterInterface } from './types.js'
+import { AdapterNotRegisteredError } from './errors'
+import type { AdapterInterface } from './types'
 
 const adapters = new Map<string, AdapterInterface>()
 const key = (t: string, p: string) => `${t}/${p}`

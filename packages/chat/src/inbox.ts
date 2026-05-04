@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
-import type { ConversationListItem, ConversationWithMessages } from './types.js';
-import { mapConversation, mapMessage, mapPatient } from './mappers.js';
+import type { ConversationListItem, ConversationWithMessages } from './types';
+import { mapConversation, mapMessage, mapPatient } from './mappers';
 
 export type ListConversationsArgs = {
   includeResolved?: boolean;

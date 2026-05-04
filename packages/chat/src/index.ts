@@ -3,18 +3,18 @@ export type {
   StatusUpdateEvent,
   ConversationListItem,
   ConversationWithMessages,
-} from './types.js';
+} from './types';
 
-export { lookupOrCreatePatientByPhone } from './patients.js';
+export { lookupOrCreatePatientByPhone } from './patients';
 export {
   getOrCreateConversation,
   addMessage,
   updateMessageDeliveryStatus,
   type GetOrCreateConversationArgs,
   type AddMessageArgs,
-} from './conversations.js';
+} from './conversations';
 export {
   listConversations,
   getConversationWithMessages,
   type ListConversationsArgs,
-} from './inbox.js';
+} from './inbox';

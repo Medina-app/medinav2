@@ -1,13 +1,13 @@
 import { afterAll, describe, expect, it } from 'vitest';
-import { listConversations, getConversationWithMessages } from '../src/inbox.js';
-import { addMessage, getOrCreateConversation } from '../src/conversations.js';
-import { lookupOrCreatePatientByPhone } from '../src/patients.js';
+import { listConversations, getConversationWithMessages } from '../src/inbox';
+import { addMessage, getOrCreateConversation } from '../src/conversations';
+import { lookupOrCreatePatientByPhone } from '../src/patients';
 import {
   createTestClinic,
   createTestIntegration,
   deleteTestClinic,
   getAdminSupabase,
-} from './helpers.js';
+} from './helpers';
 
 const sb = getAdminSupabase();
 const createdClinics: string[] = [];

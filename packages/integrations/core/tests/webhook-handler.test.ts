@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { createHmac } from 'crypto'
-import { handleWebhook } from '../src/webhook-handler.js'
-import { registry } from '../src/registry.js'
-import type { AdapterInterface, IntegrationType, WebhookContext } from '../src/types.js'
+import { handleWebhook } from '../src/webhook-handler'
+import { registry } from '../src/registry'
+import type { AdapterInterface, IntegrationType, WebhookContext } from '../src/types'
 import type { ClinicIntegration } from '@medina/db'
 
 const sign = (s: string, b: string) => createHmac('sha256', s).update(b, 'utf8').digest('hex')

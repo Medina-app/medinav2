@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest'
-import { registry } from '../src/registry.js'
-import { AdapterNotRegisteredError } from '../src/errors.js'
-import type { AdapterInterface, IntegrationType } from '../src/types.js'
+import { registry } from '../src/registry'
+import { AdapterNotRegisteredError } from '../src/errors'
+import type { AdapterInterface, IntegrationType } from '../src/types'
 import type { ClinicIntegration } from '@medina/db'
 
 const stub = (type: IntegrationType, provider: string): AdapterInterface => ({

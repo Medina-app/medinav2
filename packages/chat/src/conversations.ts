@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Conversation, Message } from '@medina/db';
-import type { StatusUpdateEvent } from './types.js';
-import { mapConversation, mapMessage } from './mappers.js';
+import type { StatusUpdateEvent } from './types';
+import { mapConversation, mapMessage } from './mappers';
 
 export type GetOrCreateConversationArgs = {
   clinicId: string;
