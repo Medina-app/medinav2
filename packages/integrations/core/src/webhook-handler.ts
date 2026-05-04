@@ -1,9 +1,10 @@
 import { createClient } from '@supabase/supabase-js'
 import type { ClinicIntegration } from '@medina/db'
-import { verifyHmacSignature } from './signature.js'
-import { registry } from './registry.js'
-import { logger } from './logger.js'
-import type { WebhookContext } from './types.js'
+import { verifyHmacSignature } from './signature'
+import { registry } from './registry'
+import { logger } from './logger'
+import { mapClinicIntegration } from './mappers'
+import type { WebhookContext } from './types'
 
 export type LookupFn = (
   type: string,
@@ -26,7 +27,9 @@ function createDefaultLookup(): LookupFn {
       .eq('clinic_id', clinicId)
       .is('deleted_at', null)
       .single()
-    return data as ClinicIntegration | null
+    // Supabase JS returns snake_case keys; map to camelCase ClinicIntegration
+    // so handler + adapters can rely on the Drizzle type contract.
+    return data ? mapClinicIntegration(data as Record<string, unknown>) : null
   }
 }
 

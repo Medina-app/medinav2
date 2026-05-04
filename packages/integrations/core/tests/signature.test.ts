@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { createHmac } from 'crypto'
-import { verifyHmacSignature } from '../src/signature.js'
+import { verifyHmacSignature } from '../src/signature'
 
 const sign = (s: string, p: string) => createHmac('sha256', s).update(p, 'utf8').digest('hex')
 

@@ -1,29 +1,33 @@
-export default function InboxPage() {
+import { getTenantContext, getSupabaseServerClient } from '@medina/auth';
+import { listConversations, getConversationWithMessages } from '@medina/chat';
+import ConversationList from './conversation-list';
+import ConversationDetail from './conversation-detail';
+import EmptyState from './empty-state';
+
+interface InboxPageProps {
+  searchParams: Promise<{ conversation?: string }>;
+}
+
+export default async function InboxPage({ searchParams }: InboxPageProps) {
+  const { conversation: convId } = await searchParams;
+  const [ctx, sb] = await Promise.all([getTenantContext(), getSupabaseServerClient()]);
+  const items = await listConversations(sb, ctx.clinicId, { includeResolved: false });
+  const detail = convId ? await getConversationWithMessages(sb, ctx.clinicId, convId) : null;
+
   return (
-    <div
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        justifyContent: 'center',
-        flex: 1,
-        padding: '80px 0',
-        gap: 8,
-      }}
-    >
-      <h2
-        style={{
-          fontSize: 18,
-          fontWeight: 600,
-          letterSpacing: '-0.025em',
-          color: 'var(--luma-text-primary)',
-        }}
+    <div className="grid grid-cols-1 md:grid-cols-[360px_1fr] h-[calc(100vh-56px)] -m-6 md:-m-8">
+      <div
+        className={`${convId ? 'hidden md:block' : 'block'} border-r border-[var(--luma-border)] overflow-y-auto bg-[var(--luma-bg-card)]`}
       >
-        Conversas
-      </h2>
-      <p style={{ fontSize: 13, color: 'var(--luma-text-tertiary)' }}>
-        Em construção.
-      </p>
+        <ConversationList items={items} selectedId={convId ?? null} clinicSlug={ctx.clinicSlug} />
+      </div>
+      <div className={`${convId ? 'block' : 'hidden md:block'} overflow-hidden`}>
+        {detail ? (
+          <ConversationDetail conversation={detail} clinicSlug={ctx.clinicSlug} />
+        ) : (
+          <EmptyState />
+        )}
+      </div>
     </div>
-  )
+  );
 }
