@@ -62,42 +62,47 @@ export type AddMessageArgs = {
 };
 
 /**
- * Webhook retry safety: if `externalId` is set, lookup an existing message
- * with the same (clinic_id, external_id) before INSERT. Trigger
- * `update_conversation_on_message` fires AFTER each successful INSERT and
- * updates the parent conversation's denormalized fields automatically.
+ * Idempotent on (clinic_id, external_id) when externalId is set, enforced by
+ * the partial UNIQUE index `idx_messages_clinic_external_id` (migration 0013).
+ * Strategy is optimistic INSERT: try first, recover the existing row on
+ * SQLSTATE 23505 (unique_violation). Closes the race window that the prior
+ * SELECT-then-INSERT had under concurrent Kapso webhook retries.
+ *
+ * Trigger `update_conversation_on_message` fires AFTER each successful INSERT
+ * and updates the parent conversation's denormalized fields automatically.
  */
 export async function addMessage(
   sb: SupabaseClient,
   a: AddMessageArgs,
 ): Promise<{ message: Message; created: boolean }> {
-  if (a.externalId) {
-    const { data: existing } = await sb
+  const insert = {
+    clinic_id: a.clinicId,
+    conversation_id: a.conversationId,
+    direction: a.direction,
+    sender_type: a.senderType,
+    sender_user_id: a.senderUserId,
+    content_type: a.contentType,
+    content: a.content,
+    external_id: a.externalId,
+    delivery_status: a.deliveryStatus ?? 'pending',
+  };
+
+  const { data, error } = await sb.from('messages').insert(insert).select('*').single();
+  if (!error) return { message: mapMessage(data), created: true };
+
+  if (error.code === '23505' && a.externalId) {
+    const { data: existing, error: lookErr } = await sb
       .from('messages')
       .select('*')
       .eq('clinic_id', a.clinicId)
       .eq('external_id', a.externalId)
       .maybeSingle();
-    if (existing) return { message: mapMessage(existing), created: false };
+    if (lookErr) throw new Error(`message lookup after conflict failed: ${lookErr.message}`);
+    if (!existing) throw new Error('unique violation but row not found');
+    return { message: mapMessage(existing), created: false };
   }
 
-  const { data, error } = await sb
-    .from('messages')
-    .insert({
-      clinic_id: a.clinicId,
-      conversation_id: a.conversationId,
-      direction: a.direction,
-      sender_type: a.senderType,
-      sender_user_id: a.senderUserId,
-      content_type: a.contentType,
-      content: a.content,
-      external_id: a.externalId,
-      delivery_status: a.deliveryStatus ?? 'pending',
-    })
-    .select('*')
-    .single();
-  if (error) throw new Error(`message insert failed: ${error.message}`);
-  return { message: mapMessage(data), created: true };
+  throw new Error(`message insert failed: ${error.message}`);
 }
 
 /**
