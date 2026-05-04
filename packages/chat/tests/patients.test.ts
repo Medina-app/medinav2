@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { lookupOrCreatePatientByPhone } from '../src/patients.js';
-import { createTestClinic, createTestPatient, deleteTestClinic, getAdminSupabase } from './helpers.js';
+import { lookupOrCreatePatientByPhone } from '../src/patients';
+import { createTestClinic, createTestPatient, deleteTestClinic, getAdminSupabase } from './helpers';
 
 const sb = getAdminSupabase();
 const createdClinics: string[] = [];
@@ -50,5 +50,40 @@ describe('lookupOrCreatePatientByPhone', () => {
 
     expect(result.created).toBe(true);
     expect(result.patient.clinicId).toBe(clinicB.id);
+  });
+
+  // Scenario 7: nameHint becomes full_name on create
+  it('uses nameHint as full_name when creating a new patient', async () => {
+    const clinic = await makeClinic('LookupNameHint');
+    const phone = `+5511${Date.now().toString().slice(-9)}`;
+
+    const result = await lookupOrCreatePatientByPhone(sb, clinic.id, phone, 'Maria Silva');
+
+    expect(result.created).toBe(true);
+    expect(result.patient.fullName).toBe('Maria Silva');
+  });
+
+  // Scenario 8: nameHint is ignored when patient already exists
+  it('preserves existing patient full_name when nameHint provided on lookup', async () => {
+    const clinic = await makeClinic('LookupPreserve');
+    const phone = `+5511${Date.now().toString().slice(-9)}`;
+    await createTestPatient(sb, clinic.id, { phone, fullName: 'João Editado pelo Usuário' });
+
+    const result = await lookupOrCreatePatientByPhone(sb, clinic.id, phone, 'Outro Nome do WhatsApp');
+
+    expect(result.created).toBe(false);
+    expect(result.patient.fullName).toBe('João Editado pelo Usuário');
+  });
+
+  it('falls back to phone as full_name when nameHint is null/empty/whitespace', async () => {
+    const clinic = await makeClinic('LookupFallback');
+    const phone1 = `+5511${Date.now().toString().slice(-9)}`;
+    const phone2 = `+5512${Date.now().toString().slice(-9)}`;
+
+    const r1 = await lookupOrCreatePatientByPhone(sb, clinic.id, phone1, null);
+    expect(r1.patient.fullName).toBe(phone1);
+
+    const r2 = await lookupOrCreatePatientByPhone(sb, clinic.id, phone2, '   ');
+    expect(r2.patient.fullName).toBe(phone2);
   });
 });

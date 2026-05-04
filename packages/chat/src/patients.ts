@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js';
 import type { Patient } from '@medina/db';
-import { mapPatient } from './mappers.js';
+import { mapPatient } from './mappers';
 
 /**
  * Find a patient by E.164 phone within a clinic, or create one with
@@ -16,6 +16,7 @@ export async function lookupOrCreatePatientByPhone(
   sb: SupabaseClient,
   clinicId: string,
   phoneE164: string,
+  nameHint?: string | null,
 ): Promise<{ patient: Patient; created: boolean }> {
   const { data: existing, error: selErr } = await sb
     .from('patients')
@@ -25,14 +26,16 @@ export async function lookupOrCreatePatientByPhone(
     .is('deleted_at', null)
     .maybeSingle();
   if (selErr) throw new Error(`patient lookup failed: ${selErr.message}`);
+  // Preserve user-edited names: if patient already exists, ignore nameHint.
   if (existing) return { patient: mapPatient(existing), created: false };
 
+  const fullName = nameHint && nameHint.trim().length > 0 ? nameHint.trim() : phoneE164;
   const { data: created, error: insErr } = await sb
     .from('patients')
     .insert({
       clinic_id: clinicId,
       phone: phoneE164,
-      full_name: phoneE164,
+      full_name: fullName,
       source: 'whatsapp',
     })
     .select('*')

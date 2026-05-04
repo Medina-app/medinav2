@@ -10,6 +10,10 @@ export type InboundMessageEvent = {
   receivedAt: Date;
   phoneNumberId: string;
   kapsoConversationId: string | undefined;
+  /** Display name from the source channel (e.g. WhatsApp profile name).
+   *  Used as full_name when creating a new patient; ignored if patient
+   *  already exists (preserves user-edited names). */
+  patientNameHint: string | null;
 };
 
 export type StatusUpdateEvent = {
