@@ -11,7 +11,7 @@ import {
   addMessage,
   updateMessageDeliveryStatus,
 } from '@medina/chat';
-import { parseInboundMessage, parseStatusUpdate } from './parse.js';
+import { parseInboundMessage, parseStatusUpdate } from './parse';
 
 function makeAdminSupabase(): SupabaseClient {
   return createClient(
@@ -26,7 +26,13 @@ async function persistInbound(
   ctx: WebhookContext,
   inbound: NonNullable<ReturnType<typeof parseInboundMessage>>,
 ): Promise<HandleResult> {
-  const { patient } = await lookupOrCreatePatientByPhone(sb, ctx.clinicId, inbound.fromPhone);
+  const { patient } = await lookupOrCreatePatientByPhone(
+    sb,
+    ctx.clinicId,
+    inbound.fromPhone,
+    inbound.patientNameHint,
+  );
+
   const { conversation } = await getOrCreateConversation(sb, {
     clinicId: ctx.clinicId,
     integrationId: ctx.integration.id,
@@ -34,6 +40,7 @@ async function persistInbound(
     externalId: inbound.fromPhone,
     patientId: patient.id,
   });
+
   const { created } = await addMessage(sb, {
     clinicId: ctx.clinicId,
     conversationId: conversation.id,
@@ -67,10 +74,15 @@ export const kapsoAdapter: AdapterInterface = {
   async handle(ctx: WebhookContext): Promise<HandleResult> {
     const sb = makeAdminSupabase();
 
-    const inbound = parseInboundMessage(ctx.payload);
+    // Event type comes from the X-Webhook-Event HTTP header per Kapso docs.
+    // Body shape is the same across received/sent/delivered/read/failed; only
+    // the header + message.kapso.{direction,status} differ.
+    const event = ctx.headers['x-webhook-event'];
+
+    const inbound = parseInboundMessage(event, ctx.payload);
     if (inbound) return persistInbound(sb, ctx, inbound);
 
-    const status = parseStatusUpdate(ctx.payload);
+    const status = parseStatusUpdate(event, ctx.payload);
     if (status) {
       const { updated } = await updateMessageDeliveryStatus(sb, ctx.clinicId, status);
       return {

@@ -1,67 +1,71 @@
 import { z } from 'zod';
 
-// Status entries inside `kapso.statuses[]` history array on outbound messages.
-const KapsoStatusEntrySchema = z.object({
+// Real Kapso webhook shape: event type travels in `X-Webhook-Event` header,
+// body carries { message, conversation?, is_new_conversation?, phone_number_id }.
+// All message events (received/sent/delivered/read/failed) share the same body
+// shape; what differs is the header + `message.kapso.{direction,status}`.
+
+const KapsoTextBody = z.object({ body: z.string() });
+
+const KapsoErrorEntry = z.object({
+  code: z.number(),
+  title: z.string(),
+  message: z.string(),
+});
+
+const KapsoStatusEntry = z.object({
   id: z.string(),
   status: z.enum(['sent', 'delivered', 'read', 'failed']),
   timestamp: z.string(),
   recipient_id: z.string().optional(),
-  errors: z
-    .array(z.object({ code: z.number(), title: z.string(), message: z.string() }))
-    .optional(),
+  errors: z.array(KapsoErrorEntry).optional(),
 });
 
-// Kapso-injected metadata block alongside the Meta-shaped message object.
-const KapsoMessageMetaSchema = z.object({
-  direction: z.enum(['inbound', 'outbound']),
-  status: z.enum(['received', 'sent', 'delivered', 'read', 'failed']),
-  statuses: z.array(KapsoStatusEntrySchema).default([]),
-});
+const KapsoMessageMeta = z
+  .object({
+    direction: z.enum(['inbound', 'outbound']),
+    status: z.enum(['received', 'sent', 'delivered', 'read', 'failed']),
+    processing_status: z.string().optional(),
+    origin: z.string().optional(),
+    has_media: z.boolean().optional(),
+    content: z.string().optional(),
+    transcript: z.string().nullable().optional(),
+    media_url: z.string().nullable().optional(),
+    statuses: z.array(KapsoStatusEntry).optional(),
+  })
+  .passthrough();
 
-// Single message envelope. `from` populated for inbound; `to` for outbound.
-export const KapsoMessageSchema = z.object({
-  id: z.string(),
-  type: z.enum([
-    'text',
-    'image',
-    'audio',
-    'video',
-    'document',
-    'sticker',
-    'location',
-    'contacts',
-    'interactive',
-    'reaction',
-  ]),
-  timestamp: z.string(),
-  from: z.string().optional(),
-  to: z.string().optional(),
-  text: z.object({ body: z.string() }).optional(),
-  kapso: KapsoMessageMetaSchema,
-  errors: z
-    .array(z.object({ code: z.number(), title: z.string(), message: z.string() }))
-    .optional(),
-});
+export const KapsoMessageSchema = z
+  .object({
+    id: z.string(),
+    type: z.string(), // text|image|audio|video|document|sticker|location|... (open-ended)
+    timestamp: z.string(),
+    from: z.string().optional(),
+    to: z.string().optional(),
+    from_user_id: z.string().optional(),
+    username: z.string().nullable().optional(),
+    text: KapsoTextBody.optional(),
+    kapso: KapsoMessageMeta,
+    errors: z.array(KapsoErrorEntry).optional(),
+  })
+  .passthrough();
 
-// Conversation block — Kapso assigns its own ID + extra fields we don't model.
 const KapsoConversationSchema = z
   .object({
     id: z.string(),
     phone_number: z.string().optional(),
+    contact_name: z.string().nullable().optional(),
   })
   .passthrough();
 
-const KapsoMessageDataSchema = z.object({
-  phone_number_id: z.string(),
-  message: KapsoMessageSchema,
-  conversation: KapsoConversationSchema.optional(),
-});
+export const KapsoMessageEventPayloadSchema = z
+  .object({
+    message: KapsoMessageSchema,
+    conversation: KapsoConversationSchema.optional(),
+    is_new_conversation: z.boolean().optional(),
+    phone_number_id: z.string(),
+  })
+  .passthrough();
 
-export const KapsoWebhookPayloadSchema = z.object({
-  type: z.string(),
-  data: KapsoMessageDataSchema,
-  test: z.boolean().optional(),
-});
-
-export type KapsoWebhookPayload = z.infer<typeof KapsoWebhookPayloadSchema>;
+export type KapsoMessageEventPayload = z.infer<typeof KapsoMessageEventPayloadSchema>;
 export type KapsoMessage = z.infer<typeof KapsoMessageSchema>;

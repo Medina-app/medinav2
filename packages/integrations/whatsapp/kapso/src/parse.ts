@@ -1,14 +1,7 @@
 import type { InboundMessageEvent, StatusUpdateEvent } from '@medina/chat';
-import { KapsoWebhookPayloadSchema, type KapsoWebhookPayload } from './types.js';
+import { KapsoMessageEventPayloadSchema, type KapsoMessageEventPayload } from './types';
 
 const ATTACHMENT_PLACEHOLDER = '[Anexo não exibido — suporte em CHAT-4]';
-
-const STATUS_EVENT_MAP: Record<string, StatusUpdateEvent['status']> = {
-  'whatsapp.message.sent': 'sent',
-  'whatsapp.message.delivered': 'delivered',
-  'whatsapp.message.read': 'read',
-  'whatsapp.message.failed': 'failed',
-};
 
 const DB_CONTENT_TYPES: ReadonlySet<string> = new Set([
   'text',
@@ -18,46 +11,65 @@ const DB_CONTENT_TYPES: ReadonlySet<string> = new Set([
   'document',
 ]);
 
-function safeParse(raw: unknown): KapsoWebhookPayload | null {
-  const parsed = KapsoWebhookPayloadSchema.safeParse(raw);
-  return parsed.success ? parsed.data : null;
+const STATUS_HEADERS: ReadonlySet<string> = new Set([
+  'whatsapp.message.sent',
+  'whatsapp.message.delivered',
+  'whatsapp.message.read',
+  'whatsapp.message.failed',
+]);
+
+/** Kapso sends phones like '5581987654321' (no +). Normalize to E.164. */
+function normalizeE164(phone: string): string {
+  return phone.startsWith('+') ? phone : `+${phone}`;
 }
 
-export function parseInboundMessage(raw: unknown): InboundMessageEvent | null {
-  const payload = safeParse(raw);
-  if (!payload || payload.type !== 'whatsapp.message.received') return null;
+export function parseMessageEventPayload(raw: unknown): KapsoMessageEventPayload | null {
+  const r = KapsoMessageEventPayloadSchema.safeParse(raw);
+  return r.success ? r.data : null;
+}
 
-  const m = payload.data.message;
+export function parseInboundMessage(
+  event: string | undefined,
+  raw: unknown,
+): InboundMessageEvent | null {
+  if (event !== 'whatsapp.message.received') return null;
+  const payload = parseMessageEventPayload(raw);
+  if (!payload) return null;
+
+  const m = payload.message;
   if (!m.from) return null;
 
-  const contentType: InboundMessageEvent['contentType'] = DB_CONTENT_TYPES.has(m.type)
+  const dbType: InboundMessageEvent['contentType'] = DB_CONTENT_TYPES.has(m.type)
     ? (m.type as InboundMessageEvent['contentType'])
     : 'system';
 
-  const content = m.type === 'text' && m.text?.body ? m.text.body : ATTACHMENT_PLACEHOLDER;
+  const content =
+    m.type === 'text' && m.text?.body ? m.text.body : ATTACHMENT_PLACEHOLDER;
 
   return {
     kind: 'inbound_message',
     externalMessageId: m.id,
-    fromPhone: m.from,
-    contentType,
+    fromPhone: normalizeE164(m.from),
+    contentType: dbType,
     content,
     receivedAt: new Date(Number(m.timestamp) * 1000),
-    phoneNumberId: payload.data.phone_number_id,
-    kapsoConversationId: payload.data.conversation?.id,
+    phoneNumberId: payload.phone_number_id,
+    kapsoConversationId: payload.conversation?.id,
+    patientNameHint: payload.conversation?.contact_name ?? null,
   };
 }
 
-export function parseStatusUpdate(raw: unknown): StatusUpdateEvent | null {
-  const payload = safeParse(raw);
+export function parseStatusUpdate(
+  event: string | undefined,
+  raw: unknown,
+): StatusUpdateEvent | null {
+  if (!event || !STATUS_HEADERS.has(event)) return null;
+  const payload = parseMessageEventPayload(raw);
   if (!payload) return null;
 
-  const status = STATUS_EVENT_MAP[payload.type];
-  if (!status) return null;
-
-  const m = payload.data.message;
-  const deliveryError =
-    status === 'failed' ? m.errors?.[0]?.message : undefined;
+  const status = event.replace('whatsapp.message.', '') as StatusUpdateEvent['status'];
+  const m = payload.message;
+  const deliveryError = status === 'failed' ? m.errors?.[0]?.message : undefined;
 
   return {
     kind: 'status_update',
@@ -68,6 +80,6 @@ export function parseStatusUpdate(raw: unknown): StatusUpdateEvent | null {
 }
 
 export function extractPhoneNumberId(raw: unknown): string | null {
-  const payload = safeParse(raw);
-  return payload?.data.phone_number_id ?? null;
+  const payload = parseMessageEventPayload(raw);
+  return payload?.phone_number_id ?? null;
 }
