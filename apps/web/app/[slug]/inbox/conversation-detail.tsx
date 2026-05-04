@@ -7,6 +7,7 @@ import type { ConversationWithMessages } from '@medina/chat';
 import { toast } from 'sonner';
 import SendMessageForm from './send-message-form';
 import MessageBubble from './_components/MessageBubble';
+import { hasActiveMessages } from './_components/has-active-messages';
 import { retryFailedMessageAction } from './retry-action';
 
 interface ConversationDetailProps {
@@ -34,13 +35,11 @@ export default function ConversationDetail({ conversation, clinicSlug }: Convers
   }, [conversation.id, conversation.messages.length]);
 
   // CHAT-2 polling: refresh server tree every 3s ONLY while there are messages
-  // in non-terminal states (pending/processing/failed). When all converge to a
-  // terminal-non-failed state (sent/delivered/read), the dependency array
-  // re-runs the effect with hasActive=false, the previous interval is cleared,
-  // and no new one is set — polling stops naturally.
-  const hasActive = conversation.messages.some(
-    (m) => m.outboxStatus === 'pending' || m.outboxStatus === 'processing' || m.outboxStatus === 'failed' || m.deliveryStatus === 'failed',
-  );
+  // in non-terminal states (pending/processing/failed). When all converge to
+  // sent/delivered/read, the dependency array re-runs the effect with
+  // hasActive=false, the previous interval is cleared, and no new one is set —
+  // polling stops naturally. See has-active-messages.test.ts for the predicate.
+  const hasActive = hasActiveMessages(conversation.messages);
 
   useEffect(() => {
     if (!hasActive) return;
