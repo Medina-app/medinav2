@@ -6,7 +6,17 @@ local dev, production deployment, and branch environments.
 ## Local development
 
 The Inngest CLI proxies events between the app and a local dev server, so
-no cloud account or env keys are required for development.
+no cloud account or production keys are required for development.
+
+**Required env var:** set `INNGEST_DEV=1` in `apps/web/.env.local` (or the
+workspace root `.env.local`) BEFORE starting the Next.js dev server. This
+flag puts both the Inngest client and the `serve()` handler in dev mode.
+Without it, Inngest v4 defaults to cloud mode and the local CLI sync
+fails with "In cloud mode but no signing key found".
+
+If `INNGEST_EVENT_KEY` or `INNGEST_SIGNING_KEY` are also set in the same
+file (e.g. copied from prod for some reason), comment them out — their
+mere presence forces cloud mode regardless of `INNGEST_DEV`.
 
 In one terminal:
 
@@ -38,6 +48,9 @@ environment):
 Both keys are obtained from the Inngest cloud dashboard
 (`https://app.inngest.com`). Without them set, production dispatch fails
 silently (events queue locally but never reach the cloud).
+
+**Do NOT set `INNGEST_DEV` in Vercel.** That flag forces dev mode and
+breaks cloud invocation.
 
 The first deploy with the keys configured will trigger Inngest cloud to
 sync the app's function definitions automatically. Subsequent deploys with
