@@ -100,6 +100,32 @@ describe('sendMessageAction early returns', () => {
     expect(result).toEqual({ error: 'Conversa não encontrada.' });
   });
 
+  it('rejects when conversation belongs to another clinic (cross-tenant)', async () => {
+    mockGetSupabaseServerClient.mockReturnValue(
+      buildSupabase({
+        conversations: {
+          data: {
+            id: 'c',
+            clinic_id: 'clinic-OTHER', // ≠ tenantCtx.clinicId ('clinic-1')
+            integration_id: 'i',
+            external_id: '+1',
+          },
+        },
+      }),
+    );
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+
+    const result = await sendMessageAction({
+      conversationId: '11111111-1111-1111-1111-111111111111',
+      content: 'oi',
+    });
+
+    expect(result).toEqual({ error: 'Conversa de outra clínica.' });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(mockAddMessage).not.toHaveBeenCalled();
+  });
+
   it('returns error when integration is missing phone_number_id', async () => {
     mockGetSupabaseServerClient.mockReturnValue(
       buildSupabase({

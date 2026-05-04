@@ -31,6 +31,15 @@ export async function sendMessageAction(input: {
   if (convErr) return { error: `Falha ao buscar conversa: ${convErr.message}` };
   if (!conv) return { error: 'Conversa não encontrada.' };
 
+  // Multi-clinic admins can read conversations across all their memberships
+  // via RLS. Without this guard, sending from clinic A's URL while passing
+  // clinic B's conversation_id would dispatch via B's Kapso credentials
+  // before the addMessage trigger blocks the cross-clinic write — leaving a
+  // "ghost" message delivered to the patient with no DB record.
+  if ((conv.clinic_id as string) !== ctx.clinicId) {
+    return { error: 'Conversa de outra clínica.' };
+  }
+
   // Use the server client (authenticated user JWT) so get_integration_credential's
   // internal has_clinic_role(...) check resolves auth.uid() to a real user.
   // Service-role admin client would yield auth.uid() = NULL → access denied.
