@@ -30,14 +30,52 @@ export async function createTestClinic(
 }
 
 export async function deleteTestClinic(sb: SupabaseClient, clinicId: string): Promise<void> {
+  // Order matters: child rows first, parent last. Each step is best-effort —
+  // a failed DELETE logs but does not abort the rest, so partial leaks from a
+  // crashed test don't cascade-block subsequent runs (the missing
+  // messages/conversations/patients deletes were the root cause of FK
+  // violations in @medina/db's cleanupAll on next run).
+  const tryDelete = async (label: string, op: () => PromiseLike<unknown>): Promise<void> => {
+    try {
+      const result = (await op()) as { error?: { message: string } | null };
+      if (result?.error) {
+        console.warn(`deleteTestClinic[${label}]: ${result.error.message}`);
+      }
+    } catch (e) {
+      console.warn(`deleteTestClinic[${label}]: ${(e as Error).message}`);
+    }
+  };
+
+  await tryDelete('messages', () =>
+    sb.from('messages').delete().eq('clinic_id', clinicId),
+  );
+  await tryDelete('conversations', () =>
+    sb.from('conversations').delete().eq('clinic_id', clinicId),
+  );
+  await tryDelete('patients', () =>
+    sb.from('patients').delete().eq('clinic_id', clinicId),
+  );
   // clinic_integrations has soft-delete trigger — soft-delete first then hard-delete.
-  await sb.from('clinic_integrations').update({ deleted_at: new Date().toISOString() })
-    .eq('clinic_id', clinicId).is('deleted_at', null);
-  await sb.from('clinic_integrations').delete().eq('clinic_id', clinicId);
-  // Audit logs FK to clinics — must clear before DELETE clinics.
-  await sb.from('audit_logs').delete().eq('clinic_id', clinicId);
-  await sb.from('clinic_members').delete().eq('clinic_id', clinicId);
-  await sb.from('clinics').delete().eq('id', clinicId);
+  await tryDelete('clinic_integrations:soft', () =>
+    sb
+      .from('clinic_integrations')
+      .update({ deleted_at: new Date().toISOString() })
+      .eq('clinic_id', clinicId)
+      .is('deleted_at', null),
+  );
+  await tryDelete('clinic_integrations', () =>
+    sb.from('clinic_integrations').delete().eq('clinic_id', clinicId),
+  );
+  // audit_logs FK to clinics — must clear before DELETE clinics.
+  await tryDelete('audit_logs', () =>
+    sb.from('audit_logs').delete().eq('clinic_id', clinicId),
+  );
+  await tryDelete('clinic_members', () =>
+    sb.from('clinic_members').delete().eq('clinic_id', clinicId),
+  );
+  await tryDelete('clinics', () =>
+    sb.from('clinics').delete().eq('id', clinicId),
+  );
 }
 
 export async function createTestPatient(
