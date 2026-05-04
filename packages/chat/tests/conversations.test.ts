@@ -189,4 +189,161 @@ describe('updateMessageDeliveryStatus', () => {
 
     expect(result.updated).toBe(false);
   });
+
+  // CHAT-2: Outbox worker may receive a stale status webhook (e.g. a 'sent'
+  // confirmation arriving after 'delivered' has already landed). The state
+  // guard rejects regressions silently so terminal callbacks (delivered/read/
+  // failed) cannot be overwritten by an out-of-order earlier status.
+  // Ordering: pending(0) < sent(1) < delivered(2) < read(3); failed=99.
+  it('terminal guard: rejects regression delivered → sent', async () => {
+    const { clinic, integration } = await makeContext('UpdGuardSent');
+    const phone = `+5511${Date.now().toString().slice(-9)}`;
+    const { conversation } = await getOrCreateConversation(sb, {
+      clinicId: clinic.id, integrationId: integration.id,
+      channel: 'whatsapp', externalId: phone, patientId: null,
+    });
+    await addMessage(sb, {
+      clinicId: clinic.id, conversationId: conversation.id,
+      direction: 'outbound', senderType: 'human', senderUserId: null,
+      contentType: 'text', content: 'r', externalId: 'wamid.GUARD-1',
+      deliveryStatus: 'delivered',
+    });
+
+    const result = await updateMessageDeliveryStatus(sb, clinic.id, {
+      kind: 'status_update',
+      externalMessageId: 'wamid.GUARD-1',
+      status: 'sent',
+      deliveryError: undefined,
+    });
+
+    expect(result.updated).toBe(false);
+    const { data } = await sb.from('messages')
+      .select('delivery_status').eq('external_id', 'wamid.GUARD-1').single();
+    expect(data?.delivery_status).toBe('delivered');
+  });
+
+  it('terminal guard: rejects regression read → delivered', async () => {
+    const { clinic, integration } = await makeContext('UpdGuardRead');
+    const phone = `+5511${Date.now().toString().slice(-9)}`;
+    const { conversation } = await getOrCreateConversation(sb, {
+      clinicId: clinic.id, integrationId: integration.id,
+      channel: 'whatsapp', externalId: phone, patientId: null,
+    });
+    await addMessage(sb, {
+      clinicId: clinic.id, conversationId: conversation.id,
+      direction: 'outbound', senderType: 'human', senderUserId: null,
+      contentType: 'text', content: 'r', externalId: 'wamid.GUARD-2',
+      deliveryStatus: 'read',
+    });
+
+    const result = await updateMessageDeliveryStatus(sb, clinic.id, {
+      kind: 'status_update',
+      externalMessageId: 'wamid.GUARD-2',
+      status: 'delivered',
+      deliveryError: undefined,
+    });
+
+    expect(result.updated).toBe(false);
+  });
+
+  it('terminal guard: rejects any transition out of failed', async () => {
+    const { clinic, integration } = await makeContext('UpdGuardFailed');
+    const phone = `+5511${Date.now().toString().slice(-9)}`;
+    const { conversation } = await getOrCreateConversation(sb, {
+      clinicId: clinic.id, integrationId: integration.id,
+      channel: 'whatsapp', externalId: phone, patientId: null,
+    });
+    await addMessage(sb, {
+      clinicId: clinic.id, conversationId: conversation.id,
+      direction: 'outbound', senderType: 'human', senderUserId: null,
+      contentType: 'text', content: 'r', externalId: 'wamid.GUARD-3',
+      deliveryStatus: 'failed',
+    });
+
+    const result = await updateMessageDeliveryStatus(sb, clinic.id, {
+      kind: 'status_update',
+      externalMessageId: 'wamid.GUARD-3',
+      status: 'delivered',
+      deliveryError: undefined,
+    });
+
+    expect(result.updated).toBe(false);
+  });
+
+  it('terminal guard: allows progression sent → delivered', async () => {
+    const { clinic, integration } = await makeContext('UpdGuardProgress');
+    const phone = `+5511${Date.now().toString().slice(-9)}`;
+    const { conversation } = await getOrCreateConversation(sb, {
+      clinicId: clinic.id, integrationId: integration.id,
+      channel: 'whatsapp', externalId: phone, patientId: null,
+    });
+    await addMessage(sb, {
+      clinicId: clinic.id, conversationId: conversation.id,
+      direction: 'outbound', senderType: 'human', senderUserId: null,
+      contentType: 'text', content: 'r', externalId: 'wamid.GUARD-4',
+      deliveryStatus: 'sent',
+    });
+
+    const result = await updateMessageDeliveryStatus(sb, clinic.id, {
+      kind: 'status_update',
+      externalMessageId: 'wamid.GUARD-4',
+      status: 'delivered',
+      deliveryError: undefined,
+    });
+
+    expect(result.updated).toBe(true);
+  });
+
+  it('terminal guard: allows transition sent → failed', async () => {
+    const { clinic, integration } = await makeContext('UpdGuardFail');
+    const phone = `+5511${Date.now().toString().slice(-9)}`;
+    const { conversation } = await getOrCreateConversation(sb, {
+      clinicId: clinic.id, integrationId: integration.id,
+      channel: 'whatsapp', externalId: phone, patientId: null,
+    });
+    await addMessage(sb, {
+      clinicId: clinic.id, conversationId: conversation.id,
+      direction: 'outbound', senderType: 'human', senderUserId: null,
+      contentType: 'text', content: 'r', externalId: 'wamid.GUARD-5',
+      deliveryStatus: 'sent',
+    });
+
+    const result = await updateMessageDeliveryStatus(sb, clinic.id, {
+      kind: 'status_update',
+      externalMessageId: 'wamid.GUARD-5',
+      status: 'failed',
+      deliveryError: 'kapso 503',
+    });
+
+    expect(result.updated).toBe(true);
+    const { data } = await sb.from('messages')
+      .select('delivery_status, delivery_error').eq('external_id', 'wamid.GUARD-5').single();
+    expect(data?.delivery_status).toBe('failed');
+    expect(data?.delivery_error).toBe('kapso 503');
+  });
+});
+
+describe('addMessage outbox', () => {
+  it('accepts outboxStatus arg and propagates to INSERT', async () => {
+    const { clinic, integration } = await makeContext('AddOutbox');
+    const phone = `+5511${Date.now().toString().slice(-9)}`;
+    const { conversation } = await getOrCreateConversation(sb, {
+      clinicId: clinic.id, integrationId: integration.id,
+      channel: 'whatsapp', externalId: phone, patientId: null,
+    });
+
+    const result = await addMessage(sb, {
+      clinicId: clinic.id, conversationId: conversation.id,
+      direction: 'outbound', senderType: 'human', senderUserId: null,
+      contentType: 'text', content: 'queue me', externalId: null,
+      deliveryStatus: 'pending',
+      outboxStatus: 'pending',
+    });
+
+    expect(result.created).toBe(true);
+    const { data } = await sb.from('messages')
+      .select('outbox_status, retry_count').eq('id', result.message.id).single();
+    expect(data?.outbox_status).toBe('pending');
+    expect(data?.retry_count).toBe(0);
+  });
 });
