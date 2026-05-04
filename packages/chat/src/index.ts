@@ -18,3 +18,9 @@ export {
   getConversationWithMessages,
   type ListConversationsArgs,
 } from './inbox';
+export {
+  queueOutboundMessage,
+  type QueueOutboundMessageArgs,
+  type InngestSendFn,
+  type InngestOutboundEvent,
+} from './outbox';
