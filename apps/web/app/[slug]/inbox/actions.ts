@@ -2,11 +2,7 @@
 
 import { z } from 'zod';
 import { revalidatePath } from 'next/cache';
-import {
-  getTenantContext,
-  getSupabaseServerClient,
-  getSupabaseAdminClient,
-} from '@medina/auth';
+import { getTenantContext, getSupabaseServerClient } from '@medina/auth';
 import { addMessage } from '@medina/chat';
 
 const SendSchema = z.object({
@@ -35,11 +31,14 @@ export async function sendMessageAction(input: {
   if (convErr) return { error: `Falha ao buscar conversa: ${convErr.message}` };
   if (!conv) return { error: 'Conversa não encontrada.' };
 
-  const admin = getSupabaseAdminClient();
-
-  const { data: integ, error: integErr } = await admin
+  // Use the server client (authenticated user JWT) so get_integration_credential's
+  // internal has_clinic_role(...) check resolves auth.uid() to a real user.
+  // Service-role admin client would yield auth.uid() = NULL → access denied.
+  // Explicit column list avoids the column-level grant on webhook_secret /
+  // encrypted_credentials revoked from authenticated in 0010_secure_webhook_secret.sql.
+  const { data: integ, error: integErr } = await sb
     .from('clinic_integrations')
-    .select('*')
+    .select('id, status, config')
     .eq('id', conv.integration_id as string)
     .is('deleted_at', null)
     .maybeSingle();
@@ -56,7 +55,7 @@ export async function sendMessageAction(input: {
     };
   }
 
-  const { data: credJson, error: credErr } = await admin.rpc('get_integration_credential', {
+  const { data: credJson, error: credErr } = await sb.rpc('get_integration_credential', {
     p_integration_id: integ.id as string,
   });
   if (credErr) return { error: `Falha ao decriptar credenciais: ${credErr.message}` };
@@ -98,7 +97,7 @@ export async function sendMessageAction(input: {
   } | null;
   const externalId = json?.messages?.[0]?.id ?? null;
 
-  await addMessage(admin, {
+  await addMessage(sb, {
     clinicId: ctx.clinicId,
     conversationId: conv.id as string,
     direction: 'outbound',
