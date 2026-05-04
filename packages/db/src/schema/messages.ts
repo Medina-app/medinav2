@@ -2,6 +2,7 @@ import {
   type AnyPgColumn,
   check,
   index,
+  integer,
   jsonb,
   pgTable,
   text,
@@ -47,7 +48,9 @@ export const messages = pgTable(
       .notNull()
       .default('pending'),
     deliveryError: text('delivery_error'),
+    lastErrorAt: timestamp('last_error_at', { withTimezone: true }),
     outboxStatus: text('outbox_status').$type<OutboxStatus | null>(),
+    retryCount: integer('retry_count').notNull().default(0),
     aiMetadata: jsonb('ai_metadata'),
     agentConfigId: uuid('agent_config_id'),
     inReplyTo: uuid('in_reply_to').references((): AnyPgColumn => messages.id, {
