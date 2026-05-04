@@ -9,7 +9,6 @@ import {
   lookupOrCreatePatientByPhone,
   getOrCreateConversation,
   addMessage,
-  updateMessageDeliveryStatus,
 } from '@medina/chat';
 import { parseInboundMessage, parseStatusUpdate } from './parse';
 
@@ -84,11 +83,25 @@ export const kapsoAdapter: AdapterInterface = {
 
     const status = parseStatusUpdate(event, ctx.payload);
     if (status) {
-      const { updated } = await updateMessageDeliveryStatus(sb, ctx.clinicId, status);
-      return {
-        processed: updated,
-        reason: updated ? 'status_updated' : 'message_not_found',
-      };
+      // CHAT-2: dispatch to Inngest instead of writing inline. The worker
+      // (process-message-status) calls @medina/chat's updateMessageDeliveryStatus
+      // with the terminal-state regression guard. Explicit error if the
+      // entrypoint forgot to inject inngestSend — silent fallback would be
+      // worse (lost status updates).
+      if (!ctx.inngestSend) {
+        throw new Error('inngestSend not configured for status path');
+      }
+      await ctx.inngestSend({
+        name: 'chat/message.status_update',
+        id: `status:${status.externalMessageId}:${status.status}`,
+        data: {
+          clinicId: ctx.clinicId,
+          externalMessageId: status.externalMessageId,
+          status: status.status,
+          deliveryError: status.deliveryError,
+        },
+      });
+      return { processed: true, reason: 'status_dispatched' };
     }
 
     return { processed: false, reason: 'unhandled_event' };

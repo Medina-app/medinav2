@@ -4,8 +4,9 @@ import {
   processOutboundMessage,
   onProcessOutboundFailure,
 } from '@/lib/inngest/functions/process-outbound-message';
+import { processMessageStatus } from '@/lib/inngest/functions/process-message-status';
 
 export const { GET, POST, PUT } = serve({
   client: inngest,
-  functions: [processOutboundMessage, onProcessOutboundFailure],
+  functions: [processOutboundMessage, onProcessOutboundFailure, processMessageStatus],
 });

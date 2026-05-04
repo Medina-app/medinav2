@@ -4,7 +4,7 @@ import { verifyHmacSignature } from './signature'
 import { registry } from './registry'
 import { logger } from './logger'
 import { mapClinicIntegration } from './mappers'
-import type { WebhookContext } from './types'
+import type { InngestSendFn, WebhookContext } from './types'
 
 export type LookupFn = (
   type: string,
@@ -43,6 +43,7 @@ export async function handleWebhook(
   req: Request,
   params: { type: string; provider: string; clinicId: string },
   lookupFn: LookupFn = createDefaultLookup(),
+  inngestSend?: InngestSendFn,
 ): Promise<Response> {
   const t0 = Date.now()
   const { type, provider, clinicId } = params
@@ -123,6 +124,7 @@ export async function handleWebhook(
     payload,
     headers: Object.fromEntries(req.headers.entries()),
     rawBody,
+    inngestSend,
   }
 
   try {
