@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Centrifuge, type Subscription } from 'centrifuge';
+import { Centrifuge, UnauthorizedError, type Subscription } from 'centrifuge';
 
 type Opts = {
   /** Channels the user has access to (allow-listed in the JWT). */
@@ -57,48 +57,80 @@ export function useCentrifugo({
     const tokenUrl = `/api/realtime/token?clinicSlug=${encodeURIComponent(clinicSlug)}`;
 
     let cancelled = false;
-    let centrifuge: Centrifuge | null = null;
-    const subs: Subscription[] = [];
+    // Refs (object closures) so the cleanup branch can reach into state that
+    // setup() populates AFTER the cleanup may have already fired. Without
+    // this, `let centrifuge` captured `null` in the cleanup closure even when
+    // setup() resumed past its awaits and built a real client — which leaked
+    // a connected Centrifuge for the lifetime of the page.
+    const state: { centrifuge: Centrifuge | null; subs: Subscription[] } = {
+      centrifuge: null,
+      subs: [],
+    };
+
+    function teardown() {
+      state.subs.forEach((s) => s.unsubscribe());
+      state.subs = [];
+      state.centrifuge?.disconnect();
+      state.centrifuge = null;
+    }
 
     async function setup() {
       const tokenRes = await fetch(tokenUrl);
-      if (!tokenRes.ok || cancelled) return;
+      if (cancelled) return;
+      if (!tokenRes.ok) return;
       const first = (await tokenRes.json()) as { token: string; url: string };
+      if (cancelled) return;
 
-      centrifuge = new Centrifuge(first.url, {
+      const c = new Centrifuge(first.url, {
         token: first.token,
-        // getToken is invoked when the current token is about to expire OR
-        // when the server tells us to refresh. Re-hits the same endpoint;
-        // the server re-runs RLS so revoked memberships drop out naturally.
+        // getToken fires when the current token is about to expire OR when
+        // the server asks for a refresh. Throwing Error → centrifuge retries
+        // (transient network / 5xx). Throwing UnauthorizedError → centrifuge
+        // gives up and disconnects, which is what we want when membership
+        // was revoked or the user signed out (server returns 401).
         getToken: async () => {
           const r = await fetch(tokenUrl);
+          if (r.status === 401) {
+            throw new UnauthorizedError('realtime token endpoint returned 401');
+          }
+          if (!r.ok) {
+            throw new Error(`realtime token endpoint returned ${r.status}`);
+          }
           const j = (await r.json()) as { token: string };
           return j.token;
         },
       });
 
-      centrifuge.on('connected', () => {
+      // If the effect was cancelled while we were constructing the client,
+      // don't even wire it up — just dispose and bail.
+      if (cancelled) {
+        c.disconnect();
+        return;
+      }
+
+      state.centrifuge = c;
+
+      c.on('connected', () => {
         setConnected(true);
         onMessageRef.current();
       });
-      centrifuge.on('disconnected', () => setConnected(false));
+      c.on('disconnected', () => setConnected(false));
 
       for (const ch of channels) {
-        const sub = centrifuge.newSubscription(ch);
+        const sub = c.newSubscription(ch);
         sub.on('publication', () => onMessageRef.current());
         sub.subscribe();
-        subs.push(sub);
+        state.subs.push(sub);
       }
 
-      centrifuge.connect();
+      c.connect();
     }
 
     void setup();
 
     return () => {
       cancelled = true;
-      subs.forEach((s) => s.unsubscribe());
-      centrifuge?.disconnect();
+      teardown();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- channelsKey covers the array change
   }, [enabled, channelsKey, clinicSlug]);
