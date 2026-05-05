@@ -19,6 +19,7 @@
     "@medina/integrations-whatsapp-kapso": "workspace:*",
     "@medina/realtime": "workspace:*",
     "@supabase/supabase-js": "^2",
+    "centrifuge": "^5.4.0",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "date-fns": "^4",
