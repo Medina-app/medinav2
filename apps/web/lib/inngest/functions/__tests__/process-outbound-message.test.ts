@@ -116,7 +116,7 @@ describe('processOutboundMessageHandler', () => {
     await processOutboundMessageHandler(baseEvent, fakeStep, deps);
 
     expect(publish).toHaveBeenCalledTimes(1);
-    expect(publish).toHaveBeenCalledWith('clinic:clinic-1:conv:conv-1', {
+    expect(publish).toHaveBeenCalledWith('conv:conv-1', {
       type: 'message.updated',
       conversationId: 'conv-1',
       messageId: 'msg-1',
@@ -196,7 +196,7 @@ describe('onProcessOutboundFailureHandler', () => {
     await onProcessOutboundFailureHandler(baseFailureEvent, { persistFailure, publish });
 
     expect(publish).toHaveBeenCalledTimes(1);
-    expect(publish).toHaveBeenCalledWith('clinic:clinic-1:conv:conv-1', {
+    expect(publish).toHaveBeenCalledWith('conv:conv-1', {
       type: 'message.updated',
       conversationId: 'conv-1',
       messageId: 'msg-failed',

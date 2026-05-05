@@ -211,7 +211,7 @@ describe('kapsoAdapter.handle inbound message', () => {
     );
 
     expect(publishEvent).toHaveBeenCalledTimes(1);
-    expect(publishEvent).toHaveBeenCalledWith('clinic:clinic-1:conv:conv-uuid', {
+    expect(publishEvent).toHaveBeenCalledWith('conv:conv-uuid', {
       type: 'message.new',
       conversationId: 'conv-uuid',
       messageId: 'msg-id-7',

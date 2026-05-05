@@ -96,7 +96,7 @@ describe('processMessageStatusHandler', () => {
     await processMessageStatusHandler(event, fakeStep, deps);
 
     expect(publish).toHaveBeenCalledTimes(1);
-    expect(publish).toHaveBeenCalledWith('clinic:clinic-a:conv:conv-1', {
+    expect(publish).toHaveBeenCalledWith('conv:conv-1', {
       type: 'message.updated',
       conversationId: 'conv-1',
       messageId: 'msg-1',

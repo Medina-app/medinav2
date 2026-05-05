@@ -65,8 +65,12 @@ async function persistInbound(
 
   // Realtime push only on a real insert — duplicates already fired their
   // push on the original delivery, no need to wake the inbox up again.
+  // Channel format mirrors @medina/realtime/buildConversationChannel — kept
+  // inline here so packages/integrations/* doesn't need to depend on
+  // @medina/realtime (the WebhookContext.publishEvent payload is `unknown`
+  // for the same decoupling reason).
   if (created) {
-    ctx.publishEvent?.(`clinic:${ctx.clinicId}:conv:${conversation.id}`, {
+    ctx.publishEvent?.(`conv:${conversation.id}`, {
       type: 'message.new',
       conversationId: conversation.id,
       messageId: message.id,

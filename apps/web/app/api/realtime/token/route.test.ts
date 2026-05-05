@@ -108,9 +108,9 @@ describe('GET /api/realtime/token', () => {
     const { payload } = await jwtVerify(body.token, new TextEncoder().encode(SECRET));
     expect(payload.sub).toBe('user-1');
     expect(payload['channels']).toEqual([
-      'clinic:clinic-a:inbox',
-      'clinic:clinic-a:conv:conv-1',
-      'clinic:clinic-a:conv:conv-2',
+      'inbox:clinic-a',
+      'conv:conv-1',
+      'conv:conv-2',
     ]);
   });
 
@@ -132,6 +132,12 @@ describe('GET /api/realtime/token', () => {
     const body = (await res.json()) as { token: string };
     const { payload } = await jwtVerify(body.token, new TextEncoder().encode(SECRET));
     const channels = payload['channels'] as string[];
-    expect(channels.every((c) => c.startsWith('clinic:clinic-x:'))).toBe(true);
+    // Cross-tenant guarantee no longer encoded in the channel string — it lives
+    // in the upstream RLS-scoped listConversations() that fed this list. Here
+    // we sanity-check the inbox channel is the right clinic's, and that exactly
+    // one conv:* channel made it through (matching the single conversation we
+    // mocked above).
+    expect(channels).toContain('inbox:clinic-x');
+    expect(channels.filter((c) => c.startsWith('conv:'))).toHaveLength(1);
   });
 });
