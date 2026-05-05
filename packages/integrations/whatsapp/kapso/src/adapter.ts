@@ -1,9 +1,10 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import type {
-  AdapterInterface,
-  WebhookContext,
-  HandleResult,
-  HealthStatus,
+import {
+  type AdapterInterface,
+  type WebhookContext,
+  type HandleResult,
+  type HealthStatus,
+  InngestDispatchError,
 } from '@medina/integrations-core';
 import {
   lookupOrCreatePatientByPhone,
@@ -91,16 +92,20 @@ export const kapsoAdapter: AdapterInterface = {
       if (!ctx.inngestSend) {
         throw new Error('inngestSend not configured for status path');
       }
-      await ctx.inngestSend({
-        name: 'chat/message.status_update',
-        id: `status:${status.externalMessageId}:${status.status}`,
-        data: {
-          clinicId: ctx.clinicId,
-          externalMessageId: status.externalMessageId,
-          status: status.status,
-          deliveryError: status.deliveryError,
-        },
-      });
+      try {
+        await ctx.inngestSend({
+          name: 'chat/message.status_update',
+          id: `status:${status.externalMessageId}:${status.status}`,
+          data: {
+            clinicId: ctx.clinicId,
+            externalMessageId: status.externalMessageId,
+            status: status.status,
+            deliveryError: status.deliveryError,
+          },
+        });
+      } catch (err) {
+        throw new InngestDispatchError(err);
+      }
       return { processed: true, reason: 'status_dispatched' };
     }
 

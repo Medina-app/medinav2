@@ -273,6 +273,15 @@ describe('kapsoAdapter.handle status update (dispatch via Inngest)', () => {
       ),
     ).rejects.toThrow(/inngestSend not configured/);
   });
+
+  it('wraps inngestSend failure as InngestDispatchError so caller can return 5xx', async () => {
+    const inngestSend = vi.fn().mockRejectedValue(new Error('upstream down'));
+    await expect(
+      kapsoAdapter.handle(
+        buildCtx(deliveredStatus, 'whatsapp.message.delivered', {}, { inngestSend }),
+      ),
+    ).rejects.toMatchObject({ name: 'InngestDispatchError' });
+  });
 });
 
 describe('kapsoAdapter.handle unhandled events', () => {

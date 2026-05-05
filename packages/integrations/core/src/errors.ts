@@ -25,3 +25,10 @@ export class AdapterError extends Error {
     this.name = 'AdapterError'
   }
 }
+
+export class InngestDispatchError extends Error {
+  constructor(cause: unknown) {
+    super('inngest dispatch failed', { cause })
+    this.name = 'InngestDispatchError'
+  }
+}

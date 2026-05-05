@@ -2,6 +2,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { createHmac } from 'crypto'
 import { handleWebhook } from '../src/webhook-handler'
 import { registry } from '../src/registry'
+import { InngestDispatchError } from '../src/errors'
 import type { AdapterInterface, IntegrationType, WebhookContext } from '../src/types'
 import type { ClinicIntegration } from '@medina/db'
 
@@ -146,6 +147,43 @@ describe('handleWebhook', () => {
     )
     expect(res.status).toBe(200)
     expect((await res.json() as { processed: boolean }).processed).toBe(false)
+  })
+
+  it('returns 503 when adapter throws InngestDispatchError (sender retries)', async () => {
+    const body = '{}'
+    registry.register(
+      makeAdapter({
+        handle: vi.fn().mockRejectedValue(new InngestDispatchError(new Error('upstream down'))),
+      }),
+    )
+    const res = await handleWebhook(
+      req(body, { 'x-kapso-signature': sign(SECRET, body) }),
+      PARAMS,
+      vi.fn().mockResolvedValue(makeInt()),
+    )
+    expect(res.status).toBe(503)
+    expect(await res.text()).toBe('inngest dispatch failed')
+  })
+
+  it('logs structured warn when InngestDispatchError surfaces', async () => {
+    const body = '{}'
+    registry.register(
+      makeAdapter({
+        handle: vi.fn().mockRejectedValue(new InngestDispatchError(new Error('upstream down'))),
+      }),
+    )
+    const spy = vi.spyOn(console, 'log')
+    await handleWebhook(
+      req(body, { 'x-kapso-signature': sign(SECRET, body) }),
+      PARAMS,
+      vi.fn().mockResolvedValue(makeInt()),
+    )
+    const entries = spy.mock.calls.map((c) => JSON.parse(c[0] as string) as Record<string, unknown>)
+    const warnEntry = entries.find(
+      (e) => e['level'] === 'warn' && e['action'] === 'inngest_dispatch',
+    )
+    expect(warnEntry?.['success']).toBe(false)
+    expect(String(warnEntry?.['error'])).toContain('inngest dispatch failed')
   })
 
   it('logs structured error when adapter throws', async () => {

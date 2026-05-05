@@ -4,6 +4,7 @@ import { verifyHmacSignature } from './signature'
 import { registry } from './registry'
 import { logger } from './logger'
 import { mapClinicIntegration } from './mappers'
+import { InngestDispatchError } from './errors'
 import type { InngestSendFn, WebhookContext } from './types'
 
 export type LookupFn = (
@@ -133,6 +134,19 @@ export async function handleWebhook(
     return j(result, 200)
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err)
+    if (err instanceof InngestDispatchError) {
+      // Surface a 5xx so the upstream sender (e.g. Kapso) retries the
+      // delivery — otherwise a transient Inngest outage silently drops
+      // status callbacks because we already 200'd the webhook.
+      logger.warn({
+        ...lb,
+        action: 'inngest_dispatch',
+        duration_ms: Date.now() - t0,
+        success: false,
+        error,
+      })
+      return new Response('inngest dispatch failed', { status: 503 })
+    }
     logger.error({ ...lb, action: 'handle', duration_ms: Date.now() - t0, success: false, error })
     return j({ processed: false, reason: 'adapter_error' }, 200)
   }
