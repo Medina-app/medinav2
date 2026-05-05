@@ -159,6 +159,42 @@ describe('clinic_integrations: encrypted_credentials', () => {
       ),
     ).rejects.toThrow('access denied');
   });
+
+  // ── 0015: service_role-only variant for Inngest worker ──────────────────────
+
+  it('service_role decrypts via get_integration_credential_internal (worker path)', async () => {
+    const clinic = await createTestClinic(sql, 'Decrypt Internal Worker');
+    const plainCredentials = '{"api_key":"worker-decrypt-ok"}';
+    const integration = await createTestIntegration(sql, clinic.id, { plainCredentials });
+
+    // sql is the service-role client — same authority as the Inngest worker
+    // makeAdminSupabase(). Role check is bypassed by design (worker has no
+    // authenticated user context).
+    const rows = await sql<{ val: string }[]>`
+      SELECT get_integration_credential_internal(${integration.id}::uuid) AS val
+    `;
+
+    expect(rows[0]?.val).toBe(plainCredentials);
+  });
+
+  it('authenticated user denied on get_integration_credential_internal (grant revoked)', async () => {
+    const clinic = await createTestClinic(sql, 'Decrypt Internal Denied');
+    const admin = await createTestUser(sql);
+    await addUserToClinic(sql, clinic.id, admin.id, 'admin');
+    const integration = await createTestIntegration(sql, clinic.id);
+
+    // Even an admin authenticated user is denied — the function REVOKEs from
+    // anon + authenticated and only GRANTs to service_role. The denial comes
+    // from the GRANT layer (SQLSTATE 42501), not from a runtime role check.
+    const client = getRlsClient(sql, admin.id);
+    await expect(
+      client.query((tx) =>
+        tx<{ val: string }[]>`
+          SELECT get_integration_credential_internal(${integration.id}::uuid) AS val
+        `,
+      ),
+    ).rejects.toThrow(/permission denied for function get_integration_credential_internal/);
+  });
 });
 
 // ─── Audit log ────────────────────────────────────────────────────────────────

@@ -1,10 +1,14 @@
 'use client';
 
 import { useEffect, useRef } from 'react';
+import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import type { ConversationWithMessages } from '@medina/chat';
-import RelativeTime from './relative-time';
+import { toast } from 'sonner';
 import SendMessageForm from './send-message-form';
+import MessageBubble from './_components/MessageBubble';
+import { hasActiveMessages } from './_components/has-active-messages';
+import { retryFailedMessageAction } from './retry-action';
 
 interface ConversationDetailProps {
   conversation: ConversationWithMessages;
@@ -22,12 +26,35 @@ const STATE_LABEL: Record<string, string> = {
 
 export default function ConversationDetail({ conversation, clinicSlug }: ConversationDetailProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
+  const router = useRouter();
 
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [conversation.id, conversation.messages.length]);
+
+  // CHAT-2 polling: refresh server tree every 3s ONLY while there are messages
+  // in non-terminal states (pending/processing/failed). When all converge to
+  // sent/delivered/read, the dependency array re-runs the effect with
+  // hasActive=false, the previous interval is cleared, and no new one is set —
+  // polling stops naturally. See has-active-messages.test.ts for the predicate.
+  const hasActive = hasActiveMessages(conversation.messages);
+
+  useEffect(() => {
+    if (!hasActive) return;
+    const id = setInterval(() => router.refresh(), 3000);
+    return () => clearInterval(id);
+  }, [hasActive, router]);
+
+  async function handleRetry(messageId: string) {
+    const result = await retryFailedMessageAction({ messageId });
+    if ('error' in result && result.error) {
+      toast.error(result.error);
+      return;
+    }
+    toast.success('Reenfileirada.');
+  }
 
   const headerName = conversation.patient?.fullName ?? conversation.externalId;
   const phone = conversation.patient?.phone ?? conversation.externalId;
@@ -60,38 +87,9 @@ export default function ConversationDetail({ conversation, clinicSlug }: Convers
           </p>
         ) : (
           <ul className="flex flex-col gap-1.5">
-            {conversation.messages.map((m) => {
-              const isOutbound = m.direction === 'outbound';
-              return (
-                <li
-                  key={m.id}
-                  className={`flex ${isOutbound ? 'justify-end' : 'justify-start'}`}
-                >
-                  <div
-                    className={`max-w-[75%] rounded-[12px] px-3.5 py-2.5 ${
-                      isOutbound
-                        ? 'bg-[var(--luma-accent-soft)] text-[var(--luma-text-primary)]'
-                        : 'bg-[var(--luma-bg-card)] border border-[var(--luma-border)] text-[var(--luma-text-primary)]'
-                    }`}
-                  >
-                    <p className="text-[13.5px] whitespace-pre-wrap break-words">
-                      {m.content ?? <em className="opacity-60">(sem conteúdo)</em>}
-                    </p>
-                    <div className="flex items-center gap-1.5 mt-1">
-                      <RelativeTime
-                        date={m.createdAt}
-                        className="text-[10.5px] text-[var(--luma-text-tertiary)]"
-                      />
-                      {isOutbound ? (
-                        <span className="text-[10px] text-[var(--luma-text-tertiary)]">
-                          · {m.deliveryStatus}
-                        </span>
-                      ) : null}
-                    </div>
-                  </div>
-                </li>
-              );
-            })}
+            {conversation.messages.map((m) => (
+              <MessageBubble key={m.id} message={m} onRetry={handleRetry} />
+            ))}
           </ul>
         )}
       </div>

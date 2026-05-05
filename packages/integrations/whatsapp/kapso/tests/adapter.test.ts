@@ -60,7 +60,16 @@ function buildCtx(
   payload: unknown,
   event: string,
   integration: Record<string, unknown> = {},
+  overrides: { inngestSend?: ReturnType<typeof vi.fn> | null } = {},
 ): Parameters<typeof kapsoAdapter.handle>[0] {
+  // CHAT-2: status path dispatches via ctx.inngestSend instead of calling
+  // updateMessageDeliveryStatus inline. Default mock here so existing tests
+  // exercising the inbound path stay unaffected; pass `inngestSend: null` to
+  // exercise the missing-dispatch error path explicitly.
+  const inngestSend = overrides.inngestSend === null
+    ? undefined
+    : overrides.inngestSend ?? vi.fn().mockResolvedValue(undefined);
+
   return {
     clinicId: 'clinic-1',
     integration: {
@@ -76,6 +85,7 @@ function buildCtx(
     payload,
     headers: { 'x-webhook-event': event },
     rawBody: JSON.stringify(payload),
+    inngestSend,
   };
 }
 
@@ -231,30 +241,46 @@ describe('kapsoAdapter.handle inbound message', () => {
   });
 });
 
-describe('kapsoAdapter.handle status update', () => {
-  // Scenario 3: status webhook updates delivery_status
-  it('whatsapp.message.delivered → updateMessageDeliveryStatus called, processed=true', async () => {
-    vi.mocked(updateMessageDeliveryStatus).mockResolvedValue({ updated: true });
+describe('kapsoAdapter.handle status update (dispatch via Inngest)', () => {
+  // CHAT-2: status webhook now fires an Inngest event instead of calling
+  // updateMessageDeliveryStatus synchronously. The worker handles persistence
+  // (with the terminal-state regression guard) on the other end.
+  it('whatsapp.message.delivered → ctx.inngestSend dispatched, returns processed=true', async () => {
+    const inngestSend = vi.fn().mockResolvedValue(undefined);
+    const result = await kapsoAdapter.handle(
+      buildCtx(deliveredStatus, 'whatsapp.message.delivered', {}, { inngestSend }),
+    );
 
-    const result = await kapsoAdapter.handle(buildCtx(deliveredStatus, 'whatsapp.message.delivered'));
-
-    expect(result).toEqual({ processed: true, reason: 'status_updated' });
-    expect(updateMessageDeliveryStatus).toHaveBeenCalledWith(
-      expect.anything(),
-      'clinic-1',
-      expect.objectContaining({
-        kind: 'status_update',
+    expect(result).toEqual({ processed: true, reason: 'status_dispatched' });
+    expect(inngestSend).toHaveBeenCalledWith({
+      name: 'chat/message.status_update',
+      id: 'status:wamid.OUT-1:delivered',
+      data: {
+        clinicId: 'clinic-1',
         externalMessageId: 'wamid.OUT-1',
         status: 'delivered',
-      }),
-    );
+        deliveryError: undefined,
+      },
+    });
+    // Adapter must NOT call the sync helper anymore.
+    expect(updateMessageDeliveryStatus).not.toHaveBeenCalled();
   });
 
-  it('returns processed=false reason=message_not_found when nothing updated', async () => {
-    vi.mocked(updateMessageDeliveryStatus).mockResolvedValue({ updated: false });
+  it('throws explicit error when ctx.inngestSend is missing (no silent fallback)', async () => {
+    await expect(
+      kapsoAdapter.handle(
+        buildCtx(deliveredStatus, 'whatsapp.message.delivered', {}, { inngestSend: null }),
+      ),
+    ).rejects.toThrow(/inngestSend not configured/);
+  });
 
-    const result = await kapsoAdapter.handle(buildCtx(deliveredStatus, 'whatsapp.message.delivered'));
-    expect(result).toEqual({ processed: false, reason: 'message_not_found' });
+  it('wraps inngestSend failure as InngestDispatchError so caller can return 5xx', async () => {
+    const inngestSend = vi.fn().mockRejectedValue(new Error('upstream down'));
+    await expect(
+      kapsoAdapter.handle(
+        buildCtx(deliveredStatus, 'whatsapp.message.delivered', {}, { inngestSend }),
+      ),
+    ).rejects.toMatchObject({ name: 'InngestDispatchError' });
   });
 });
 

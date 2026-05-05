@@ -18,46 +18,57 @@ vi.mock('@medina/auth', () => ({
   getSupabaseServerClient: () => mockGetSupabaseServerClient(),
 }));
 
-const mockAddMessage = vi.fn();
+const mockQueueOutboundMessage = vi.fn();
 vi.mock('@medina/chat', () => ({
-  addMessage: (...args: unknown[]) => mockAddMessage(...args),
+  queueOutboundMessage: (...args: unknown[]) => mockQueueOutboundMessage(...args),
+}));
+
+const mockInngestSend = vi.fn().mockResolvedValue(undefined);
+vi.mock('@/lib/inngest/client', () => ({
+  inngest: { send: (...args: unknown[]) => mockInngestSend(...args) },
 }));
 
 import { sendMessageAction } from './actions';
+import { retryFailedMessageAction } from './retry-action';
 
-// Build a minimal chainable Supabase client mock that multiplexes by table name.
-// Each .from(table) returns a chain whose .maybeSingle() resolves to the row
-// for that table (or null + error message if provided).
+// CHAT-2 mock: chainable Supabase client.
+// Supports .from(table).select(...).eq(...).is(...).maybeSingle()  (read path)
+//      and .from(table).update({...}).eq('id', x)                  (write path)
 type RowOrError = { data: Record<string, unknown> | null; errorMsg?: string };
 function buildSupabase(opts: {
   conversations?: RowOrError;
-  clinic_integrations?: RowOrError;
-  rpcCredJson?: string | null;
-  rpcError?: string;
+  messages?: RowOrError;
+  updateError?: string;
 }) {
+  const updateMock = vi.fn();
   const fromMock = vi.fn((table: string) => {
     const spec =
       table === 'conversations'
         ? opts.conversations ?? { data: null }
-        : table === 'clinic_integrations'
-          ? opts.clinic_integrations ?? { data: null }
+        : table === 'messages'
+          ? opts.messages ?? { data: null }
           : { data: null };
+
     const maybeSingle = vi.fn().mockResolvedValue(
       spec.errorMsg
         ? { data: null, error: { message: spec.errorMsg } }
         : { data: spec.data, error: null },
     );
     const isFn = vi.fn().mockReturnValue({ maybeSingle });
-    const eq = vi.fn().mockReturnValue({ is: isFn });
+    const eq = vi.fn().mockReturnValue({ is: isFn, maybeSingle });
     const select = vi.fn().mockReturnValue({ eq });
-    return { select };
+
+    const updateEq = vi.fn().mockResolvedValue(
+      opts.updateError ? { error: { message: opts.updateError } } : { error: null },
+    );
+    const update = (patch: Record<string, unknown>) => {
+      updateMock(table, patch);
+      return { eq: updateEq };
+    };
+
+    return { select, update };
   });
-  const rpc = vi.fn().mockResolvedValue(
-    opts.rpcError
-      ? { data: null, error: { message: opts.rpcError } }
-      : { data: opts.rpcCredJson ?? null, error: null },
-  );
-  return { from: fromMock, rpc };
+  return { client: { from: fromMock } as unknown, fromMock, updateMock };
 }
 
 beforeEach(() => {
@@ -91,30 +102,24 @@ describe('sendMessageAction zod validation', () => {
 
 describe('sendMessageAction early returns', () => {
   it('returns error when conversation not found', async () => {
-    mockGetSupabaseServerClient.mockReturnValue(buildSupabase({ conversations: { data: null } }));
+    const sb = buildSupabase({ conversations: { data: null } });
+    mockGetSupabaseServerClient.mockReturnValue(sb.client);
 
     const result = await sendMessageAction({
       conversationId: '11111111-1111-1111-1111-111111111111',
       content: 'oi',
     });
     expect(result).toEqual({ error: 'Conversa não encontrada.' });
+    expect(mockQueueOutboundMessage).not.toHaveBeenCalled();
   });
 
-  it('rejects when conversation belongs to another clinic (cross-tenant)', async () => {
-    mockGetSupabaseServerClient.mockReturnValue(
-      buildSupabase({
-        conversations: {
-          data: {
-            id: 'c',
-            clinic_id: 'clinic-OTHER', // ≠ tenantCtx.clinicId ('clinic-1')
-            integration_id: 'i',
-            external_id: '+1',
-          },
-        },
-      }),
-    );
-    const fetchMock = vi.fn();
-    vi.stubGlobal('fetch', fetchMock);
+  it('rejects when conversation belongs to another clinic (cross-tenant W1)', async () => {
+    const sb = buildSupabase({
+      conversations: {
+        data: { id: 'c', clinic_id: 'clinic-OTHER', integration_id: 'i', external_id: '+1' },
+      },
+    });
+    mockGetSupabaseServerClient.mockReturnValue(sb.client);
 
     const result = await sendMessageAction({
       conversationId: '11111111-1111-1111-1111-111111111111',
@@ -122,120 +127,154 @@ describe('sendMessageAction early returns', () => {
     });
 
     expect(result).toEqual({ error: 'Conversa de outra clínica.' });
-    expect(fetchMock).not.toHaveBeenCalled();
-    expect(mockAddMessage).not.toHaveBeenCalled();
-  });
-
-  it('returns error when integration is missing phone_number_id', async () => {
-    mockGetSupabaseServerClient.mockReturnValue(
-      buildSupabase({
-        conversations: { data: { id: 'c', clinic_id: 'clinic-1', integration_id: 'i', external_id: '+1' } },
-        clinic_integrations: { data: { id: 'i', status: 'active', config: {} } },
-      }),
-    );
-
-    const result = await sendMessageAction({
-      conversationId: '11111111-1111-1111-1111-111111111111',
-      content: 'oi',
-    });
-    expect('error' in result && result.error).toMatch(/phone_number_id ainda não capturado/);
+    expect(mockQueueOutboundMessage).not.toHaveBeenCalled();
   });
 });
 
-describe('sendMessageAction happy path', () => {
-  it('fetches creds via sb.rpc, posts to Kapso, inserts outbound message', async () => {
+describe('sendMessageAction queues via outbox (no synchronous Kapso)', () => {
+  it('calls queueOutboundMessage with conversationId, content, senderUserId; returns ok+messageId', async () => {
     const conv = {
       id: '11111111-1111-1111-1111-111111111111',
       clinic_id: 'clinic-1',
       integration_id: 'integ-1',
       external_id: '+5511987654321',
     };
-    const integ = {
-      id: 'integ-1',
-      status: 'active',
-      config: { phone_number_id: '647015955153740' },
-    };
-    const credJson = JSON.stringify({ api_key: 'kapso-key-xyz' });
+    const sb = buildSupabase({ conversations: { data: conv } });
+    mockGetSupabaseServerClient.mockReturnValue(sb.client);
+    mockQueueOutboundMessage.mockResolvedValue({ messageId: 'msg-queued-42' });
 
-    mockGetSupabaseServerClient.mockReturnValue(
-      buildSupabase({
-        conversations: { data: conv },
-        clinic_integrations: { data: integ },
-        rpcCredJson: credJson,
-      }),
-    );
-    mockAddMessage.mockResolvedValue({ message: { id: 'msg-1' }, created: true });
-
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      json: async () => ({ messages: [{ id: 'wamid.OUT-1' }] }),
-      text: async () => '',
-    });
+    const fetchMock = vi.fn();
     vi.stubGlobal('fetch', fetchMock);
 
-    const result = await sendMessageAction({
-      conversationId: conv.id,
-      content: 'olá paciente',
+    const result = await sendMessageAction({ conversationId: conv.id, content: 'olá paciente' });
+
+    expect(result).toEqual({ ok: true, messageId: 'msg-queued-42' });
+    expect(mockQueueOutboundMessage).toHaveBeenCalledWith(
+      sb.client,
+      expect.any(Function),
+      {
+        clinicId: 'clinic-1',
+        conversationId: conv.id,
+        content: 'olá paciente',
+        senderUserId: 'user-1',
+      },
+    );
+    // Action must NOT hit Kapso directly anymore — that's the worker's job.
+    const kapsoCalls = fetchMock.mock.calls.filter((c) => {
+      const url = typeof c[0] === 'string' ? c[0] : c[0]?.toString() ?? '';
+      return url.includes('kapso.ai');
+    });
+    expect(kapsoCalls).toHaveLength(0);
+  });
+
+  it('surfaces queueOutboundMessage error to caller without crashing', async () => {
+    const conv = {
+      id: '11111111-1111-1111-1111-111111111111',
+      clinic_id: 'clinic-1',
+      integration_id: 'integ-1',
+      external_id: '+5511987654321',
+    };
+    const sb = buildSupabase({ conversations: { data: conv } });
+    mockGetSupabaseServerClient.mockReturnValue(sb.client);
+    mockQueueOutboundMessage.mockRejectedValue(new Error('inngest down'));
+
+    const result = await sendMessageAction({ conversationId: conv.id, content: 'oi' });
+
+    expect('error' in result && result.error).toMatch(/inngest down/);
+  });
+});
+
+describe('retryFailedMessageAction', () => {
+  it('rejects when message not found', async () => {
+    const sb = buildSupabase({ messages: { data: null } });
+    mockGetSupabaseServerClient.mockReturnValue(sb.client);
+
+    const result = await retryFailedMessageAction({
+      messageId: '11111111-1111-1111-1111-111111111111',
+    });
+
+    expect(result).toEqual({ error: 'Mensagem não encontrada.' });
+    expect(mockInngestSend).not.toHaveBeenCalled();
+  });
+
+  it('rejects when message belongs to another clinic (cross-tenant)', async () => {
+    const sb = buildSupabase({
+      messages: {
+        data: {
+          id: 'msg-1',
+          clinic_id: 'clinic-OTHER',
+          conversation_id: 'c-1',
+          outbox_status: 'failed',
+        },
+      },
+    });
+    mockGetSupabaseServerClient.mockReturnValue(sb.client);
+
+    const result = await retryFailedMessageAction({
+      messageId: '11111111-1111-1111-1111-111111111111',
+    });
+
+    expect(result).toEqual({ error: 'Mensagem não encontrada.' });
+    expect(mockInngestSend).not.toHaveBeenCalled();
+  });
+
+  it('rejects when outbox_status is not failed', async () => {
+    const sb = buildSupabase({
+      messages: {
+        data: {
+          id: 'msg-1',
+          clinic_id: 'clinic-1',
+          conversation_id: 'c-1',
+          outbox_status: 'sent',
+        },
+      },
+    });
+    mockGetSupabaseServerClient.mockReturnValue(sb.client);
+
+    const result = await retryFailedMessageAction({
+      messageId: '11111111-1111-1111-1111-111111111111',
+    });
+
+    expect(result).toEqual({ error: 'Mensagem não está em estado falho.' });
+    expect(mockInngestSend).not.toHaveBeenCalled();
+  });
+
+  it('happy path: resets fields, dispatches Inngest event with retry suffix id', async () => {
+    const sb = buildSupabase({
+      messages: {
+        data: {
+          id: 'msg-1',
+          clinic_id: 'clinic-1',
+          conversation_id: 'c-1',
+          outbox_status: 'failed',
+        },
+      },
+    });
+    mockGetSupabaseServerClient.mockReturnValue(sb.client);
+
+    const result = await retryFailedMessageAction({
+      messageId: '11111111-1111-1111-1111-111111111111',
     });
 
     expect(result).toEqual({ ok: true });
-    expect(fetchMock).toHaveBeenCalledWith(
-      'https://api.kapso.ai/meta/whatsapp/v24.0/647015955153740/messages',
-      expect.objectContaining({
-        method: 'POST',
-        headers: expect.objectContaining({ 'X-API-Key': 'kapso-key-xyz' }),
-      }),
-    );
-    expect(mockAddMessage).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        clinicId: 'clinic-1',
-        conversationId: conv.id,
-        direction: 'outbound',
-        senderType: 'human',
-        senderUserId: 'user-1',
-        contentType: 'text',
-        content: 'olá paciente',
-        externalId: 'wamid.OUT-1',
-        deliveryStatus: 'sent',
-      }),
-    );
-  });
-
-  it('returns error when Kapso API returns 503', async () => {
-    const conv = {
-      id: '11111111-1111-1111-1111-111111111111',
-      clinic_id: 'clinic-1',
-      integration_id: 'integ-1',
-      external_id: '+5511987654321',
-    };
-    const integ = {
-      id: 'integ-1',
-      status: 'active',
-      config: { phone_number_id: '647015955153740' },
-    };
-
-    mockGetSupabaseServerClient.mockReturnValue(
-      buildSupabase({
-        conversations: { data: conv },
-        clinic_integrations: { data: integ },
-        rpcCredJson: JSON.stringify({ api_key: 'k' }),
-      }),
-    );
-
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue({
-      ok: false,
-      status: 503,
-      text: async () => 'service unavailable',
-    }));
-
-    const result = await sendMessageAction({
-      conversationId: conv.id,
-      content: 'oi',
+    expect(sb.updateMock).toHaveBeenCalledWith('messages', {
+      outbox_status: 'pending',
+      delivery_error: null,
+      last_error_at: null,
+      retry_count: 0,
     });
-
-    expect('error' in result && result.error).toMatch(/Kapso retornou 503/);
-    expect(mockAddMessage).not.toHaveBeenCalled();
+    expect(mockInngestSend).toHaveBeenCalledTimes(1);
+    const dispatched = mockInngestSend.mock.calls[0]![0] as {
+      name: string;
+      id: string;
+      data: Record<string, string>;
+    };
+    expect(dispatched.name).toBe('chat/message.outbound');
+    expect(dispatched.id).toMatch(/^outbound:msg-1:retry-\d+$/);
+    expect(dispatched.data).toEqual({
+      messageId: 'msg-1',
+      clinicId: 'clinic-1',
+      conversationId: 'c-1',
+    });
   });
 });

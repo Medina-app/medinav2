@@ -4,7 +4,8 @@ import { verifyHmacSignature } from './signature'
 import { registry } from './registry'
 import { logger } from './logger'
 import { mapClinicIntegration } from './mappers'
-import type { WebhookContext } from './types'
+import { InngestDispatchError } from './errors'
+import type { InngestSendFn, WebhookContext } from './types'
 
 export type LookupFn = (
   type: string,
@@ -43,6 +44,7 @@ export async function handleWebhook(
   req: Request,
   params: { type: string; provider: string; clinicId: string },
   lookupFn: LookupFn = createDefaultLookup(),
+  inngestSend?: InngestSendFn,
 ): Promise<Response> {
   const t0 = Date.now()
   const { type, provider, clinicId } = params
@@ -123,6 +125,7 @@ export async function handleWebhook(
     payload,
     headers: Object.fromEntries(req.headers.entries()),
     rawBody,
+    inngestSend,
   }
 
   try {
@@ -131,6 +134,19 @@ export async function handleWebhook(
     return j(result, 200)
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err)
+    if (err instanceof InngestDispatchError) {
+      // Surface a 5xx so the upstream sender (e.g. Kapso) retries the
+      // delivery — otherwise a transient Inngest outage silently drops
+      // status callbacks because we already 200'd the webhook.
+      logger.warn({
+        ...lb,
+        action: 'inngest_dispatch',
+        duration_ms: Date.now() - t0,
+        success: false,
+        error,
+      })
+      return new Response('inngest dispatch failed', { status: 503 })
+    }
     logger.error({ ...lb, action: 'handle', duration_ms: Date.now() - t0, success: false, error })
     return j({ processed: false, reason: 'adapter_error' }, 200)
   }

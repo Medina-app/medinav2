@@ -1,0 +1,14 @@
+import { serve } from 'inngest/next';
+import { inngest } from '@/lib/inngest/client';
+import {
+  processOutboundMessage,
+  onProcessOutboundFailure,
+} from '@/lib/inngest/functions/process-outbound-message';
+import { processMessageStatus } from '@/lib/inngest/functions/process-message-status';
+
+// signingKey + isDev are configured on the client (lib/inngest/client.ts)
+// and inherited here, so the serve handler stays minimal.
+export const { GET, POST, PUT } = serve({
+  client: inngest,
+  functions: [processOutboundMessage, onProcessOutboundFailure, processMessageStatus],
+});

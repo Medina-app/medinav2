@@ -22,12 +22,18 @@ export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
   // ── Public routes ──────────────────────────────────────────────────────────
+  // /api/inngest is public for the same reason as /api/webhooks: the
+  // serve() handler validates incoming requests by signing key (production)
+  // and discovery (GET) is meant to be unauthenticated. Without this bypass,
+  // `inngest-cli dev` cannot sync functions during local development and
+  // Inngest cloud cannot invoke functions in production.
   if (
     pathname === '/' ||
     pathname.startsWith('/login') ||
     pathname.startsWith('/signup') ||
     pathname.startsWith('/api/auth') ||
     pathname.startsWith('/api/webhooks') ||
+    pathname.startsWith('/api/inngest') ||
     pathname.startsWith('/_next') ||
     pathname.includes('favicon')
   ) {
