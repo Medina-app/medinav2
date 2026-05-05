@@ -53,6 +53,7 @@ export default function ConversationDetail({
     channels,
     onMessage: () => router.refresh(),
     enabled: realtimeEnabled,
+    clinicSlug,
   });
 
   // CHAT-2 polling kept as graceful-degradation fallback: only spins up when

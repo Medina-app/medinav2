@@ -20,7 +20,7 @@ export default async function InboxPage({ searchParams }: InboxPageProps) {
       <div
         className={`${convId ? 'hidden md:block' : 'block'} border-r border-[var(--luma-border)] overflow-y-auto bg-[var(--luma-bg-card)]`}
       >
-        <InboxRealtimeWrapper clinicId={ctx.clinicId}>
+        <InboxRealtimeWrapper clinicId={ctx.clinicId} clinicSlug={ctx.clinicSlug}>
           <ConversationList
             items={items}
             selectedId={convId ?? null}

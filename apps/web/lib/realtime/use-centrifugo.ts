@@ -10,6 +10,12 @@ type Opts = {
   onMessage: () => void;
   /** Master kill switch. When false, hook is a no-op. */
   enabled?: boolean;
+  /**
+   * Tenant slug used to scope the token request. The /api/realtime/token
+   * endpoint reads this from the query string because middleware doesn't
+   * inject x-tenant-slug into /api/* paths.
+   */
+  clinicSlug: string;
 };
 
 type State = {
@@ -28,7 +34,12 @@ type State = {
  * without enabling Centrifugo's stateful history feature (which would
  * require Redis on the broker).
  */
-export function useCentrifugo({ channels, onMessage, enabled = true }: Opts): State {
+export function useCentrifugo({
+  channels,
+  onMessage,
+  enabled = true,
+  clinicSlug,
+}: Opts): State {
   const [connected, setConnected] = useState(false);
 
   // Keep the latest callback in a ref so the effect doesn't re-subscribe on
@@ -43,12 +54,14 @@ export function useCentrifugo({ channels, onMessage, enabled = true }: Opts): St
   useEffect(() => {
     if (!enabled || channels.length === 0) return;
 
+    const tokenUrl = `/api/realtime/token?clinicSlug=${encodeURIComponent(clinicSlug)}`;
+
     let cancelled = false;
     let centrifuge: Centrifuge | null = null;
     const subs: Subscription[] = [];
 
     async function setup() {
-      const tokenRes = await fetch('/api/realtime/token');
+      const tokenRes = await fetch(tokenUrl);
       if (!tokenRes.ok || cancelled) return;
       const first = (await tokenRes.json()) as { token: string; url: string };
 
@@ -58,7 +71,7 @@ export function useCentrifugo({ channels, onMessage, enabled = true }: Opts): St
         // when the server tells us to refresh. Re-hits the same endpoint;
         // the server re-runs RLS so revoked memberships drop out naturally.
         getToken: async () => {
-          const r = await fetch('/api/realtime/token');
+          const r = await fetch(tokenUrl);
           const j = (await r.json()) as { token: string };
           return j.token;
         },
@@ -88,7 +101,7 @@ export function useCentrifugo({ channels, onMessage, enabled = true }: Opts): St
       centrifuge?.disconnect();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps -- channelsKey covers the array change
-  }, [enabled, channelsKey]);
+  }, [enabled, channelsKey, clinicSlug]);
 
   return { connected };
 }

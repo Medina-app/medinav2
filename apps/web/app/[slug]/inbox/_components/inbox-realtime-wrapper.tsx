@@ -16,9 +16,11 @@ import { buildInboxChannel } from '@medina/realtime';
  */
 export default function InboxRealtimeWrapper({
   clinicId,
+  clinicSlug,
   children,
 }: {
   clinicId: string;
+  clinicSlug: string;
   children: ReactNode;
 }) {
   const router = useRouter();
@@ -27,6 +29,7 @@ export default function InboxRealtimeWrapper({
     channels: [buildInboxChannel(clinicId)],
     onMessage: () => router.refresh(),
     enabled,
+    clinicSlug,
   });
   return <>{children}</>;
 }
