@@ -35,13 +35,19 @@ describe('hasActiveMessages', () => {
     expect(hasActiveMessages([])).toBe(false);
   });
 
-  it('returns false when all messages are terminal non-failed (sent/delivered/read)', () => {
+  it('returns false when all messages reached terminal success (delivered/read)', () => {
     const msgs = [
-      msg({ id: 'a', outboxStatus: 'sent', deliveryStatus: 'sent' }),
-      msg({ id: 'b', outboxStatus: 'sent', deliveryStatus: 'delivered' }),
-      msg({ id: 'c', outboxStatus: 'sent', deliveryStatus: 'read' }),
+      msg({ id: 'a', outboxStatus: 'sent', deliveryStatus: 'delivered' }),
+      msg({ id: 'b', outboxStatus: 'sent', deliveryStatus: 'read' }),
     ];
     expect(hasActiveMessages(msgs)).toBe(false);
+  });
+
+  it('returns true when outbox_status=sent and delivery_status is still in flight', () => {
+    // Worker handed off to carrier (wamid acquired) but no delivered/read
+    // callback yet — keep polling so the UI flips ✓ → ✓✓ live.
+    const msgs = [msg({ outboxStatus: 'sent', deliveryStatus: 'sent' })];
+    expect(hasActiveMessages(msgs)).toBe(true);
   });
 
   it('returns true when ANY message has outbox_status=pending', () => {
@@ -57,14 +63,14 @@ describe('hasActiveMessages', () => {
     expect(hasActiveMessages(msgs)).toBe(true);
   });
 
-  it('returns true when ANY message has outbox_status=failed (user must click Retentar)', () => {
+  it('returns false when outbox_status=failed (terminal — user clicks Retentar, no polling)', () => {
     const msgs = [msg({ outboxStatus: 'failed', deliveryStatus: 'pending' })];
-    expect(hasActiveMessages(msgs)).toBe(true);
+    expect(hasActiveMessages(msgs)).toBe(false);
   });
 
-  it('returns true on delivery_status=failed even if outbox_status=sent (callback failure path)', () => {
+  it('returns false when delivery_status=failed (terminal carrier failure, no polling)', () => {
     const msgs = [msg({ outboxStatus: 'sent', deliveryStatus: 'failed' })];
-    expect(hasActiveMessages(msgs)).toBe(true);
+    expect(hasActiveMessages(msgs)).toBe(false);
   });
 
   it('inbound messages with delivery_status=delivered do not trigger polling', () => {
