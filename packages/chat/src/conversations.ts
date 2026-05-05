@@ -122,19 +122,25 @@ const STATUS_ORDER: Record<NonNullable<Message['deliveryStatus']>, number> = {
 
 /**
  * Update the delivery_status (and optional delivery_error) of an existing
- * outbound message, keyed by (clinic_id, external_id). Returns updated=false
- * if no row matches — common when a status webhook arrives before our
- * INSERT outbound path completes — or if the incoming status would regress
- * a more advanced state (terminal-state guard).
+ * outbound message, keyed by (clinic_id, external_id). On success returns
+ * messageId + conversationId so a downstream realtime publisher can build
+ * the channel name without re-querying. Returns `{ updated: false }` if no
+ * row matches — common when a status webhook arrives before our INSERT
+ * outbound path completes — or if the incoming status would regress a
+ * more advanced state (terminal-state guard).
  */
+export type UpdateDeliveryStatusResult =
+  | { updated: false }
+  | { updated: true; messageId: string; conversationId: string };
+
 export async function updateMessageDeliveryStatus(
   sb: SupabaseClient,
   clinicId: string,
   evt: StatusUpdateEvent,
-): Promise<{ updated: boolean }> {
+): Promise<UpdateDeliveryStatusResult> {
   const { data: current, error: selErr } = await sb
     .from('messages')
-    .select('id, delivery_status')
+    .select('id, delivery_status, conversation_id')
     .eq('clinic_id', clinicId)
     .eq('external_id', evt.externalMessageId)
     .maybeSingle();
@@ -154,5 +160,9 @@ export async function updateMessageDeliveryStatus(
     .update(patch)
     .eq('id', current.id as string);
   if (updErr) throw new Error(`delivery_status update failed: ${updErr.message}`);
-  return { updated: true };
+  return {
+    updated: true,
+    messageId: current.id as string,
+    conversationId: current.conversation_id as string,
+  };
 }

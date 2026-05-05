@@ -1,5 +1,15 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
-import { updateMessageDeliveryStatus, type StatusUpdateEvent } from '@medina/chat';
+import {
+  updateMessageDeliveryStatus,
+  type StatusUpdateEvent,
+  type UpdateDeliveryStatusResult,
+} from '@medina/chat';
+import {
+  buildConversationChannel,
+  publishToChannelFireAndForget,
+  type EventPayload,
+  type PublisherDeps,
+} from '@medina/realtime';
 import { inngest } from '@/lib/inngest/client';
 
 // ─── Types ───────────────────────────────────────────────────────────────
@@ -17,7 +27,8 @@ export type ProcessMessageStatusDeps = {
   updateDeliveryStatus: (
     clinicId: string,
     evt: StatusUpdateEvent,
-  ) => Promise<{ updated: boolean }>;
+  ) => Promise<UpdateDeliveryStatusResult>;
+  publish?: (channel: string, payload: EventPayload) => void;
 };
 
 export type StepLike = {
@@ -30,9 +41,9 @@ export async function processMessageStatusHandler(
   event: ProcessMessageStatusEvent,
   step: StepLike,
   deps: ProcessMessageStatusDeps,
-): Promise<{ updated: boolean }> {
+): Promise<UpdateDeliveryStatusResult> {
   const { clinicId, externalMessageId, status, deliveryError } = event.data;
-  return step.run('update-delivery-status', () =>
+  const result = await step.run('update-delivery-status', () =>
     deps.updateDeliveryStatus(clinicId, {
       kind: 'status_update',
       externalMessageId,
@@ -40,6 +51,14 @@ export async function processMessageStatusHandler(
       deliveryError,
     }),
   );
+  if (result.updated) {
+    deps.publish?.(buildConversationChannel(clinicId, result.conversationId), {
+      type: 'message.updated',
+      conversationId: result.conversationId,
+      messageId: result.messageId,
+    });
+  }
+  return result;
 }
 
 // ─── Production wiring ───────────────────────────────────────────────────
@@ -52,10 +71,19 @@ function makeAdminSupabase(): SupabaseClient {
   );
 }
 
+function getPublisherDeps(): PublisherDeps {
+  return {
+    apiUrl: process.env['CENTRIFUGO_API_URL'] ?? '',
+    apiKey: process.env['CENTRIFUGO_API_KEY'] ?? '',
+  };
+}
+
 function makeDefaultDeps(): ProcessMessageStatusDeps {
   const sb = makeAdminSupabase();
+  const pub = getPublisherDeps();
   return {
     updateDeliveryStatus: (clinicId, evt) => updateMessageDeliveryStatus(sb, clinicId, evt),
+    publish: (channel, payload) => publishToChannelFireAndForget(pub, channel, payload),
   };
 }
 

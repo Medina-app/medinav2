@@ -41,6 +41,14 @@ function makeDeps(overrides: Partial<ProcessOutboundDeps> = {}): ProcessOutbound
   };
 }
 
+const baseFailureEvent = {
+  data: {
+    event: { data: { messageId: 'msg-failed', clinicId: 'clinic-1', conversationId: 'conv-1' } },
+    error: { message: 'kapso 503 service unavailable' },
+    attempts: 5,
+  },
+};
+
 describe('processOutboundMessageHandler', () => {
   it('happy path: marks processing → decrypts → POSTs → persists success with wamid', async () => {
     const deps = makeDeps();
@@ -102,6 +110,34 @@ describe('processOutboundMessageHandler', () => {
     expect(deps.repo.persistSuccess).not.toHaveBeenCalled();
   });
 
+  it('publishes message.updated to the conversation channel after persistSuccess', async () => {
+    const publish = vi.fn();
+    const deps = makeDeps({ publish });
+    await processOutboundMessageHandler(baseEvent, fakeStep, deps);
+
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(publish).toHaveBeenCalledWith('clinic:clinic-1:conv:conv-1', {
+      type: 'message.updated',
+      conversationId: 'conv-1',
+      messageId: 'msg-1',
+    });
+  });
+
+  it('does NOT publish when the message was already sent (idempotent skip)', async () => {
+    const publish = vi.fn();
+    const deps = makeDeps({
+      publish,
+      repo: {
+        loadContext: vi.fn().mockResolvedValue({ alreadySent: true } satisfies OutboxContextResult),
+        markProcessing: vi.fn(),
+        persistSuccess: vi.fn(),
+        persistFailure: vi.fn(),
+      },
+    });
+    await processOutboundMessageHandler(baseEvent, fakeStep, deps);
+    expect(publish).not.toHaveBeenCalled();
+  });
+
   it('throws when message context cannot be loaded (e.g. row missing)', async () => {
     const deps = makeDeps({
       repo: {
@@ -152,5 +188,18 @@ describe('onProcessOutboundFailureHandler', () => {
     await onProcessOutboundFailureHandler(event, { persistFailure });
 
     expect(persistFailure).toHaveBeenCalledWith('msg-x', 'short err', 5);
+  });
+
+  it('publishes message.updated to the conversation channel after persistFailure', async () => {
+    const persistFailure = vi.fn().mockResolvedValue(undefined);
+    const publish = vi.fn();
+    await onProcessOutboundFailureHandler(baseFailureEvent, { persistFailure, publish });
+
+    expect(publish).toHaveBeenCalledTimes(1);
+    expect(publish).toHaveBeenCalledWith('clinic:clinic-1:conv:conv-1', {
+      type: 'message.updated',
+      conversationId: 'conv-1',
+      messageId: 'msg-failed',
+    });
   });
 });
