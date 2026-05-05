@@ -27,7 +27,8 @@ export function validateAndBuildMemoryArgs(
 
 // createClinicMemory uses @mastra/pg PostgresStore.
 // Not unit-tested here (requires live Postgres). Called by the livechat integration layer.
-export async function createClinicMemory(connectionString: string) {
+// AI-3 will wire this into the agent factory; AI-1 leaves it as a typed stub.
+export async function createClinicMemory(clinicId: string, connectionString: string) {
   const { PostgresStore } = await import('@mastra/pg')
-  return new PostgresStore({ connectionString })
+  return new PostgresStore({ id: `clinic:${clinicId}:memory`, connectionString })
 }

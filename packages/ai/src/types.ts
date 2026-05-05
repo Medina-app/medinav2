@@ -1,4 +1,4 @@
-import type { Agent } from '@mastra/core'
+import type { Agent } from '@mastra/core/agent'
 
 export interface AgentConfig {
   id: string

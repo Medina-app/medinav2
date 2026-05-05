@@ -1,4 +1,4 @@
-import { Agent } from '@mastra/core'
+import { Agent } from '@mastra/core/agent'
 import { anthropic } from '@ai-sdk/anthropic'
 import { openai } from '@ai-sdk/openai'
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -62,6 +62,7 @@ export async function createAgent(opts: CreateAgentOpts): Promise<CreateAgentRes
   const model = resolveModel(config.model)
 
   const agent = new Agent({
+    id: `clinic:${clinicId}:agent:${config.name}:v${config.version}`,
     name: config.name,
     model,
     instructions: config.systemPrompt,

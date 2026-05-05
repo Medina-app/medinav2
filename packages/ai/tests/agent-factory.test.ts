@@ -1,9 +1,9 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { AgentNotFoundError, NamespacingViolationError } from '../src/errors.js'
 
-// Mock @mastra/core Agent before any module imports
+// Mock @mastra/core/agent Agent before any module imports
 const MockAgent = vi.fn().mockImplementation((opts: unknown) => ({ _opts: opts }))
-vi.mock('@mastra/core', () => ({ Agent: MockAgent }))
+vi.mock('@mastra/core/agent', () => ({ Agent: MockAgent }))
 
 // Mock AI providers
 const mockAnthropic = vi.fn().mockReturnValue({ _provider: 'anthropic', _id: '' })
