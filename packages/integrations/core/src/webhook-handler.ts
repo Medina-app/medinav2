@@ -5,7 +5,7 @@ import { registry } from './registry'
 import { logger } from './logger'
 import { mapClinicIntegration } from './mappers'
 import { InngestDispatchError } from './errors'
-import type { InngestSendFn, WebhookContext } from './types'
+import type { InngestSendFn, PublishEventFn, WebhookContext } from './types'
 
 export type LookupFn = (
   type: string,
@@ -45,6 +45,7 @@ export async function handleWebhook(
   params: { type: string; provider: string; clinicId: string },
   lookupFn: LookupFn = createDefaultLookup(),
   inngestSend?: InngestSendFn,
+  publishEvent?: PublishEventFn,
 ): Promise<Response> {
   const t0 = Date.now()
   const { type, provider, clinicId } = params
@@ -126,6 +127,7 @@ export async function handleWebhook(
     headers: Object.fromEntries(req.headers.entries()),
     rawBody,
     inngestSend,
+    publishEvent,
   }
 
   try {

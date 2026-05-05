@@ -1,4 +1,10 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import {
+  buildConversationChannel,
+  publishToChannelFireAndForget,
+  type EventPayload,
+  type PublisherDeps,
+} from '@medina/realtime';
 import { inngest } from '@/lib/inngest/client';
 
 // ─── Types ───────────────────────────────────────────────────────────────
@@ -32,10 +38,12 @@ export type ProcessOutboundDeps = {
   repo: OutboxRepo;
   decryptCredential: (integrationId: string) => Promise<{ api_key: string }>;
   fetchKapso: FetchKapsoFn;
+  publish?: (channel: string, payload: EventPayload) => void;
 };
 
 export type OnFailureDeps = {
   persistFailure: OutboxRepo['persistFailure'];
+  publish?: (channel: string, payload: EventPayload) => void;
 };
 
 // Test-friendly step abstraction: in production, Inngest provides a richer
@@ -63,7 +71,7 @@ export async function processOutboundMessageHandler(
   step: StepLike,
   deps: ProcessOutboundDeps,
 ): Promise<{ sent: true } | { skipped: 'already_sent' }> {
-  const { messageId } = event.data;
+  const { messageId, clinicId, conversationId } = event.data;
 
   const ctxResult = await step.run('load-context', () => deps.repo.loadContext(messageId));
   if (ctxResult.alreadySent) return { skipped: 'already_sent' };
@@ -85,6 +93,11 @@ export async function processOutboundMessageHandler(
   );
 
   await step.run('persist-success', () => deps.repo.persistSuccess(messageId, wamid));
+  deps.publish?.(buildConversationChannel(clinicId, conversationId), {
+    type: 'message.updated',
+    conversationId,
+    messageId,
+  });
 
   return { sent: true };
 }
@@ -95,10 +108,15 @@ export async function onProcessOutboundFailureHandler(
   event: OnFailureEvent,
   deps: OnFailureDeps,
 ): Promise<void> {
-  const { messageId } = event.data.event.data;
+  const { messageId, clinicId, conversationId } = event.data.event.data;
   const truncated = event.data.error.message.slice(0, FAILURE_TRUNCATE);
   const retryCount = event.data.attempts ?? 5;
   await deps.persistFailure(messageId, truncated, retryCount);
+  deps.publish?.(buildConversationChannel(clinicId, conversationId), {
+    type: 'message.updated',
+    conversationId,
+    messageId,
+  });
 }
 
 // ─── Production wiring ───────────────────────────────────────────────────
@@ -234,19 +252,32 @@ async function fetchKapsoReal(params: {
   return { wamid };
 }
 
+function getPublisherDeps(): PublisherDeps {
+  return {
+    apiUrl: process.env['CENTRIFUGO_API_URL'] ?? '',
+    apiKey: process.env['CENTRIFUGO_API_KEY'] ?? '',
+  };
+}
+
 function makeDefaultDeps(): ProcessOutboundDeps {
   const sb = makeAdminSupabase();
+  const pub = getPublisherDeps();
   return {
     repo: makeOutboxRepo(sb),
     decryptCredential: (integrationId) => decryptCredentialReal(sb, integrationId),
     fetchKapso: fetchKapsoReal,
+    publish: (channel, payload) => publishToChannelFireAndForget(pub, channel, payload),
   };
 }
 
 function makeDefaultOnFailureDeps(): OnFailureDeps {
   const sb = makeAdminSupabase();
   const repo = makeOutboxRepo(sb);
-  return { persistFailure: repo.persistFailure };
+  const pub = getPublisherDeps();
+  return {
+    persistFailure: repo.persistFailure,
+    publish: (channel, payload) => publishToChannelFireAndForget(pub, channel, payload),
+  };
 }
 
 // ─── Inngest wiring ──────────────────────────────────────────────────────

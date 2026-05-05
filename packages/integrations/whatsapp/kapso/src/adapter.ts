@@ -4,6 +4,7 @@ import {
   type WebhookContext,
   type HandleResult,
   type HealthStatus,
+  type PublishEventFn,
   InngestDispatchError,
 } from '@medina/integrations-core';
 import {
@@ -12,6 +13,36 @@ import {
   addMessage,
 } from '@medina/chat';
 import { parseInboundMessage, parseStatusUpdate } from './parse';
+
+// PublishEventFn is contracted as `=> void` (fire-and-forget) but the wiring
+// at apps/web/.../webhooks/[...].ts builds it from publishToChannelFireAndForget,
+// which already swallows async failures. The remaining failure mode is a
+// synchronous throw before the publisher even queues the request (bad config,
+// bad fetch impl). Wrap so a Centrifugo glitch never breaks webhook ACK —
+// the DB has the message, the inbox falls back to polling.
+function safePublish(
+  publish: PublishEventFn | undefined,
+  channel: string,
+  payload: unknown,
+  ctx: { clinicId: string; integrationId: string },
+): void {
+  if (!publish) return;
+  try {
+    publish(channel, payload);
+  } catch (err) {
+    console.warn(
+      JSON.stringify({
+        timestamp: new Date().toISOString(),
+        level: 'warn',
+        action: 'publishEvent_threw',
+        channel,
+        clinic_id: ctx.clinicId,
+        integration_id: ctx.integrationId,
+        error: err instanceof Error ? err.message : String(err),
+      }),
+    );
+  }
+}
 
 function makeAdminSupabase(): SupabaseClient {
   return createClient(
@@ -41,7 +72,7 @@ async function persistInbound(
     patientId: patient.id,
   });
 
-  const { created } = await addMessage(sb, {
+  const { message, created } = await addMessage(sb, {
     clinicId: ctx.clinicId,
     conversationId: conversation.id,
     direction: 'inbound',
@@ -61,6 +92,29 @@ async function persistInbound(
       .from('clinic_integrations')
       .update({ config: { ...cfg, phone_number_id: inbound.phoneNumberId } })
       .eq('id', ctx.integration.id);
+  }
+
+  // Realtime push only on a real insert — duplicates already fired their
+  // push on the original delivery, no need to wake the inbox up again.
+  // Channel format mirrors @medina/realtime/buildConversationChannel and
+  // buildInboxChannel — kept inline here so packages/integrations/* doesn't
+  // need to depend on @medina/realtime (the WebhookContext.publishEvent
+  // payload is `unknown` for the same decoupling reason).
+  //
+  // Two publishes: the conversation channel wakes a subscriber that has the
+  // detail open, and the inbox channel wakes the InboxRealtimeWrapper so the
+  // sidebar's last_message_at + unread_count refresh even when no detail is
+  // currently mounted.
+  if (created) {
+    const evt = {
+      type: 'message.new' as const,
+      conversationId: conversation.id,
+      messageId: message.id,
+      clinicId: ctx.clinicId,
+    };
+    const logCtx = { clinicId: ctx.clinicId, integrationId: ctx.integration.id };
+    safePublish(ctx.publishEvent, `conv:${conversation.id}`, evt, logCtx);
+    safePublish(ctx.publishEvent, `inbox:${ctx.clinicId}`, evt, logCtx);
   }
 
   return { processed: true, reason: created ? 'message_inserted' : 'duplicate_idempotent' };

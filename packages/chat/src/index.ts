@@ -17,6 +17,7 @@ export {
   updateMessageDeliveryStatus,
   type GetOrCreateConversationArgs,
   type AddMessageArgs,
+  type UpdateDeliveryStatusResult,
 } from './conversations';
 export {
   listConversations,

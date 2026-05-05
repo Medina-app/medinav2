@@ -150,14 +150,14 @@ describe('addMessage', () => {
 });
 
 describe('updateMessageDeliveryStatus', () => {
-  it('updates row by (clinic_id, external_id)', async () => {
+  it('updates row by (clinic_id, external_id) and returns messageId + conversationId', async () => {
     const { clinic, integration } = await makeContext('UpdStatus');
     const phone = `+5511${Date.now().toString().slice(-9)}`;
     const { conversation } = await getOrCreateConversation(sb, {
       clinicId: clinic.id, integrationId: integration.id,
       channel: 'whatsapp', externalId: phone, patientId: null,
     });
-    await addMessage(sb, {
+    const { message } = await addMessage(sb, {
       clinicId: clinic.id, conversationId: conversation.id,
       direction: 'outbound', senderType: 'human', senderUserId: null,
       contentType: 'text', content: 'reply', externalId: 'wamid.STATUS-1',
@@ -172,6 +172,12 @@ describe('updateMessageDeliveryStatus', () => {
     });
 
     expect(result.updated).toBe(true);
+    if (result.updated) {
+      // Downstream realtime publisher needs both ids to build the channel name
+      // and identify the affected row.
+      expect(result.messageId).toBe(message.id);
+      expect(result.conversationId).toBe(conversation.id);
+    }
     const { data } = await sb.from('messages')
       .select('delivery_status').eq('external_id', 'wamid.STATUS-1').single();
     expect(data?.delivery_status).toBe('delivered');

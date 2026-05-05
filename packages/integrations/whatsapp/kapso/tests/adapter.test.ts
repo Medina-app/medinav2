@@ -60,7 +60,10 @@ function buildCtx(
   payload: unknown,
   event: string,
   integration: Record<string, unknown> = {},
-  overrides: { inngestSend?: ReturnType<typeof vi.fn> | null } = {},
+  overrides: {
+    inngestSend?: ReturnType<typeof vi.fn> | null;
+    publishEvent?: ReturnType<typeof vi.fn>;
+  } = {},
 ): Parameters<typeof kapsoAdapter.handle>[0] {
   // CHAT-2: status path dispatches via ctx.inngestSend instead of calling
   // updateMessageDeliveryStatus inline. Default mock here so existing tests
@@ -86,6 +89,7 @@ function buildCtx(
     headers: { 'x-webhook-event': event },
     rawBody: JSON.stringify(payload),
     inngestSend,
+    publishEvent: overrides.publishEvent,
   };
 }
 
@@ -185,6 +189,88 @@ describe('kapsoAdapter.handle inbound message', () => {
       expect.anything(),
       expect.objectContaining({ patientId: 'existing-pat' }),
     );
+  });
+
+  it('publishes message.new to BOTH the conversation channel and the inbox channel after persistInbound succeeds', async () => {
+    vi.mocked(lookupOrCreatePatientByPhone).mockResolvedValue({
+      patient: { id: 'pat-1' } as never,
+      created: true,
+    });
+    vi.mocked(getOrCreateConversation).mockResolvedValue({
+      conversation: { id: 'conv-uuid' } as never,
+      created: true,
+    });
+    vi.mocked(addMessage).mockResolvedValue({
+      message: { id: 'msg-id-7' } as never,
+      created: true,
+    });
+
+    const publishEvent = vi.fn();
+    await kapsoAdapter.handle(
+      buildCtx(baseInbound, 'whatsapp.message.received', {}, { publishEvent }),
+    );
+
+    const expectedPayload = {
+      type: 'message.new',
+      conversationId: 'conv-uuid',
+      messageId: 'msg-id-7',
+      clinicId: 'clinic-1',
+    };
+    expect(publishEvent).toHaveBeenCalledTimes(2);
+    expect(publishEvent).toHaveBeenNthCalledWith(1, 'conv:conv-uuid', expectedPayload);
+    expect(publishEvent).toHaveBeenNthCalledWith(2, 'inbox:clinic-1', expectedPayload);
+  });
+
+  it('swallows a synchronous publishEvent throw so webhook ACK is not blocked', async () => {
+    vi.mocked(lookupOrCreatePatientByPhone).mockResolvedValue({
+      patient: { id: 'pat-1' } as never,
+      created: true,
+    });
+    vi.mocked(getOrCreateConversation).mockResolvedValue({
+      conversation: { id: 'conv-uuid' } as never,
+      created: true,
+    });
+    vi.mocked(addMessage).mockResolvedValue({
+      message: { id: 'msg-id-9' } as never,
+      created: true,
+    });
+
+    const publishEvent = vi.fn(() => {
+      throw new Error('centrifugo url misconfigured');
+    });
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+    const result = await kapsoAdapter.handle(
+      buildCtx(baseInbound, 'whatsapp.message.received', {}, { publishEvent }),
+    );
+
+    // Both channels attempted; both threw; both swallowed.
+    expect(publishEvent).toHaveBeenCalledTimes(2);
+    expect(result).toEqual({ processed: true, reason: 'message_inserted' });
+    expect(warnSpy).toHaveBeenCalledTimes(2);
+    warnSpy.mockRestore();
+  });
+
+  it('does NOT publish when addMessage reports duplicate (idempotent retry)', async () => {
+    vi.mocked(lookupOrCreatePatientByPhone).mockResolvedValue({
+      patient: { id: 'pat' } as never,
+      created: false,
+    });
+    vi.mocked(getOrCreateConversation).mockResolvedValue({
+      conversation: { id: 'conv' } as never,
+      created: false,
+    });
+    vi.mocked(addMessage).mockResolvedValue({
+      message: { id: 'msg' } as never,
+      created: false,
+    });
+
+    const publishEvent = vi.fn();
+    await kapsoAdapter.handle(
+      buildCtx(baseInbound, 'whatsapp.message.received', {}, { publishEvent }),
+    );
+
+    expect(publishEvent).not.toHaveBeenCalled();
   });
 
   // Scenario 2: unsupported types persist with placeholder content
