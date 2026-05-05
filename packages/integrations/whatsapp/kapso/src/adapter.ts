@@ -41,7 +41,7 @@ async function persistInbound(
     patientId: patient.id,
   });
 
-  const { created } = await addMessage(sb, {
+  const { message, created } = await addMessage(sb, {
     clinicId: ctx.clinicId,
     conversationId: conversation.id,
     direction: 'inbound',
@@ -61,6 +61,16 @@ async function persistInbound(
       .from('clinic_integrations')
       .update({ config: { ...cfg, phone_number_id: inbound.phoneNumberId } })
       .eq('id', ctx.integration.id);
+  }
+
+  // Realtime push only on a real insert — duplicates already fired their
+  // push on the original delivery, no need to wake the inbox up again.
+  if (created) {
+    ctx.publishEvent?.(`clinic:${ctx.clinicId}:conv:${conversation.id}`, {
+      type: 'message.new',
+      conversationId: conversation.id,
+      messageId: message.id,
+    });
   }
 
   return { processed: true, reason: created ? 'message_inserted' : 'duplicate_idempotent' };

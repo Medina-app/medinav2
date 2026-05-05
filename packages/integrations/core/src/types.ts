@@ -16,6 +16,14 @@ export type InngestSendFn = (event: {
   data: unknown
 }) => Promise<unknown>
 
+/**
+ * Fire-and-forget publish into a realtime broker (Centrifugo). Optional and
+ * payload-typed as `unknown` so the integrations layer doesn't depend on
+ * @medina/realtime — adapters cast locally when they import the EventPayload
+ * type. Production wiring lives at the apps/web webhook route.
+ */
+export type PublishEventFn = (channel: string, payload: unknown) => void
+
 export type WebhookContext = {
   clinicId: string
   integration: ClinicIntegration
@@ -23,6 +31,7 @@ export type WebhookContext = {
   headers: Record<string, string>
   rawBody: string
   inngestSend?: InngestSendFn
+  publishEvent?: PublishEventFn
 }
 
 export type HandleResult = { processed: boolean; reason?: string }
