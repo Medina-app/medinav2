@@ -3,6 +3,7 @@ import { listConversations, getConversationWithMessages } from '@medina/chat';
 import ConversationList from './conversation-list';
 import ConversationDetail from './conversation-detail';
 import EmptyState from './empty-state';
+import InboxRealtimeWrapper from './_components/inbox-realtime-wrapper';
 
 interface InboxPageProps {
   searchParams: Promise<{ conversation?: string }>;
@@ -19,11 +20,21 @@ export default async function InboxPage({ searchParams }: InboxPageProps) {
       <div
         className={`${convId ? 'hidden md:block' : 'block'} border-r border-[var(--luma-border)] overflow-y-auto bg-[var(--luma-bg-card)]`}
       >
-        <ConversationList items={items} selectedId={convId ?? null} clinicSlug={ctx.clinicSlug} />
+        <InboxRealtimeWrapper clinicId={ctx.clinicId}>
+          <ConversationList
+            items={items}
+            selectedId={convId ?? null}
+            clinicSlug={ctx.clinicSlug}
+          />
+        </InboxRealtimeWrapper>
       </div>
       <div className={`${convId ? 'block' : 'hidden md:block'} overflow-hidden`}>
         {detail ? (
-          <ConversationDetail conversation={detail} clinicSlug={ctx.clinicSlug} />
+          <ConversationDetail
+            conversation={detail}
+            clinicSlug={ctx.clinicSlug}
+            clinicId={ctx.clinicId}
+          />
         ) : (
           <EmptyState />
         )}

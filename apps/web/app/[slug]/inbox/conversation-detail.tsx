@@ -1,18 +1,21 @@
 'use client';
 
-import { useEffect, useRef } from 'react';
+import { useEffect, useMemo, useRef } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import type { ConversationWithMessages } from '@medina/chat';
 import { toast } from 'sonner';
+import { buildConversationChannel } from '@medina/realtime';
 import SendMessageForm from './send-message-form';
 import MessageBubble from './_components/MessageBubble';
 import { hasActiveMessages } from './_components/has-active-messages';
 import { retryFailedMessageAction } from './retry-action';
+import { useCentrifugo } from '@/lib/realtime/use-centrifugo';
 
 interface ConversationDetailProps {
   conversation: ConversationWithMessages;
   clinicSlug: string;
+  clinicId: string;
 }
 
 const STATE_LABEL: Record<string, string> = {
@@ -24,7 +27,11 @@ const STATE_LABEL: Record<string, string> = {
   resolved: 'Resolvida',
 };
 
-export default function ConversationDetail({ conversation, clinicSlug }: ConversationDetailProps) {
+export default function ConversationDetail({
+  conversation,
+  clinicSlug,
+  clinicId,
+}: ConversationDetailProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const router = useRouter();
 
@@ -34,18 +41,31 @@ export default function ConversationDetail({ conversation, clinicSlug }: Convers
     }
   }, [conversation.id, conversation.messages.length]);
 
-  // CHAT-2 polling: refresh server tree every 3s ONLY while there are messages
-  // in non-terminal states (pending/processing/failed). When all converge to
-  // sent/delivered/read, the dependency array re-runs the effect with
-  // hasActive=false, the previous interval is cleared, and no new one is set —
-  // polling stops naturally. See has-active-messages.test.ts for the predicate.
+  // CHAT-3: subscribe to the conversation's Centrifugo channel. Each event
+  // triggers router.refresh() so Next.js re-fetches the canonical state from
+  // the DB — we never trust the WS payload directly.
+  const realtimeEnabled = process.env['NEXT_PUBLIC_REALTIME_ENABLED'] !== 'false';
+  const channels = useMemo(
+    () => [buildConversationChannel(clinicId, conversation.id)],
+    [clinicId, conversation.id],
+  );
+  const { connected } = useCentrifugo({
+    channels,
+    onMessage: () => router.refresh(),
+    enabled: realtimeEnabled,
+  });
+
+  // CHAT-2 polling kept as graceful-degradation fallback: only spins up when
+  // realtime is unavailable AND there are messages in non-terminal states.
+  // When the WS reconnects, `connected` flips true and the interval clears.
   const hasActive = hasActiveMessages(conversation.messages);
 
   useEffect(() => {
+    if (connected) return;
     if (!hasActive) return;
     const id = setInterval(() => router.refresh(), 3000);
     return () => clearInterval(id);
-  }, [hasActive, router]);
+  }, [hasActive, router, connected]);
 
   async function handleRetry(messageId: string) {
     const result = await retryFailedMessageAction({ messageId });
