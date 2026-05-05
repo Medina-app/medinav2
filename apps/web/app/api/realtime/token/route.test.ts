@@ -90,8 +90,11 @@ describe('GET /api/realtime/token', () => {
     (getSupabaseServerClient as ReturnType<typeof vi.fn>).mockResolvedValue(
       makeAuthedSupabase('user-1'),
     );
+    // Distinct id and slug so we can prove the route uses the resolved
+    // clinic.id (UUID) for channel construction and listConversations,
+    // not the slug it received in the query string.
     (assertTenantAccess as ReturnType<typeof vi.fn>).mockResolvedValue({
-      id: 'clinic-a',
+      id: 'clinic-uuid-1',
       slug: 'clinic-a',
       name: 'Clinic A',
       role: 'owner',
@@ -108,10 +111,15 @@ describe('GET /api/realtime/token', () => {
     const { payload } = await jwtVerify(body.token, new TextEncoder().encode(SECRET));
     expect(payload.sub).toBe('user-1');
     expect(payload['channels']).toEqual([
-      'inbox:clinic-a',
+      'inbox:clinic-uuid-1',
       'conv:conv-1',
       'conv:conv-2',
     ]);
+    expect(listConversations).toHaveBeenCalledWith(
+      expect.anything(),
+      'clinic-uuid-1',
+      expect.objectContaining({ includeResolved: false }),
+    );
   });
 
   it('cross-tenant isolation: channels do not include other clinics', async () => {
