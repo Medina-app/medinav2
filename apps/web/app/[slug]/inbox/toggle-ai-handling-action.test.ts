@@ -103,9 +103,9 @@ describe('toggleAiHandlingAction', () => {
     expect(sb.rpcMock).toHaveBeenCalledWith(
       'transition_conversation_state',
       expect.objectContaining({
-        p_conversation_id: '11111111-1111-1111-1111-111111111111',
-        p_new_state: 'waiting_human',
-        p_reason: 'human_paused_ai',
+        conv_id: '11111111-1111-1111-1111-111111111111',
+        new_state: 'waiting_human',
+        reason: 'human_paused_ai',
       }),
     );
   });
@@ -123,8 +123,8 @@ describe('toggleAiHandlingAction', () => {
     expect(sb.rpcMock).toHaveBeenCalledWith(
       'transition_conversation_state',
       expect.objectContaining({
-        p_new_state: 'ai_handling',
-        p_reason: 'human_returned_to_ai',
+        new_state: 'ai_handling',
+        reason: 'human_returned_to_ai',
       }),
     );
   });

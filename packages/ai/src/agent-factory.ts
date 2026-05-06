@@ -6,8 +6,11 @@ import type { AgentConfig, CreateAgentResult } from './types.js'
 
 export interface CreateAgentOpts {
   clinicId: string
+  /** Defaults to 'agente-principal'. Multi-agent routing future-proofing (fix #8). */
   agentName?: string
   supabase: SupabaseClient
+  /** Tool record built by buildToolsFromConfig, keyed by tool id. */
+  tools?: Record<string, unknown>
 }
 
 // All models go through OpenRouter — use the model id from agent_configs.model
@@ -38,7 +41,7 @@ function rowToConfig(row: Record<string, unknown>): AgentConfig {
 }
 
 export async function createAgent(opts: CreateAgentOpts): Promise<CreateAgentResult> {
-  const { clinicId, agentName = 'default', supabase } = opts
+  const { clinicId, agentName = 'agente-principal', supabase, tools } = opts
 
   const { data, error } = await supabase
     .from('agent_configs')
@@ -68,6 +71,10 @@ export async function createAgent(opts: CreateAgentOpts): Promise<CreateAgentRes
     name: config.name,
     model,
     instructions: config.systemPrompt,
+    // tools is Record<string, unknown> at our boundary; Mastra expects
+    // ToolsInput (Record<string, ToolAction|...>). buildToolsFromConfig only
+    // populates entries from createTool() so the runtime shape is correct.
+    ...(tools ? { tools: tools as never } : {}),
   })
 
   return { agent, config }
