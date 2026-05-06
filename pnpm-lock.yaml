@@ -241,6 +241,9 @@ importers:
         specifier: ^3.4.5
         version: 3.4.9
     devDependencies:
+      '@supabase/supabase-js':
+        specifier: ^2
+        version: 2.105.1
       '@types/node':
         specifier: ^22
         version: 22.19.17
