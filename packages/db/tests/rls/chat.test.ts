@@ -1,25 +1,34 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import {
   addUserToClinic,
-  cleanupAll,
   createTestClinic,
   createTestConversation,
   createTestIntegration,
   createTestMessage,
   createTestPatient,
   createTestUser,
+  deleteTestClinic,
   getRlsClient,
   getServiceClient,
 } from './helpers/setup.js';
 
 const sql = getServiceClient();
-beforeAll(async () => { await cleanupAll(sql); });
-afterAll(async () => { await cleanupAll(sql); await sql.end(); });
+const createdClinics: string[] = [];
+async function makeClinic(name: string) {
+  const c = await createTestClinic(sql, name);
+  createdClinics.push(c.id);
+  return c;
+}
+
+afterAll(async () => {
+  await Promise.all(createdClinics.map((id) => deleteTestClinic(sql, id)));
+  await sql.end();
+});
 
 describe('conversations: cross-tenant isolation', () => {
   it('users only see conversations of their clinics', async () => {
-    const cA = await createTestClinic(sql, 'Conv A');
-    const cB = await createTestClinic(sql, 'Conv B');
+    const cA = await makeClinic('Conv A');
+    const cB = await makeClinic('Conv B');
     const uA = await createTestUser(sql);
     const uB = await createTestUser(sql);
     await addUserToClinic(sql, cA.id, uA.id);
@@ -38,8 +47,8 @@ describe('conversations: cross-tenant isolation', () => {
 
 describe('messages: cross-tenant isolation', () => {
   it('users only see messages of their clinics', async () => {
-    const cA = await createTestClinic(sql, 'Msg A');
-    const cB = await createTestClinic(sql, 'Msg B');
+    const cA = await makeClinic('Msg A');
+    const cB = await makeClinic('Msg B');
     const uA = await createTestUser(sql);
     await addUserToClinic(sql, cA.id, uA.id);
     const intA = await createTestIntegration(sql, cA.id);
@@ -58,7 +67,7 @@ describe('messages: cross-tenant isolation', () => {
 
 describe('conversations: insert policies', () => {
   it('non-member cannot insert conversation', async () => {
-    const clinic = await createTestClinic(sql, 'Non-member C');
+    const clinic = await makeClinic('Non-member C');
     const outsider = await createTestUser(sql);
     const integration = await createTestIntegration(sql, clinic.id);
 
@@ -71,7 +80,7 @@ describe('conversations: insert policies', () => {
   });
 
   it('members can insert conversation and message', async () => {
-    const clinic = await createTestClinic(sql, 'Member Insert');
+    const clinic = await makeClinic('Member Insert');
     const user = await createTestUser(sql);
     await addUserToClinic(sql, clinic.id, user.id);
     const integration = await createTestIntegration(sql, clinic.id);
@@ -99,7 +108,7 @@ describe('conversations: insert policies', () => {
 
 describe('state machine', () => {
   it('only allowed state transitions succeed', async () => {
-    const clinic = await createTestClinic(sql, 'State Machine');
+    const clinic = await makeClinic('State Machine');
     const integration = await createTestIntegration(sql, clinic.id);
     const conv = await createTestConversation(sql, clinic.id, integration.id);
 
@@ -119,7 +128,7 @@ describe('state machine', () => {
 
 describe('soft delete', () => {
   it('messages remain accessible when conversation is soft-deleted', async () => {
-    const clinic = await createTestClinic(sql, 'Soft Delete');
+    const clinic = await makeClinic('Soft Delete');
     const user = await createTestUser(sql);
     await addUserToClinic(sql, clinic.id, user.id);
     const integration = await createTestIntegration(sql, clinic.id);
@@ -145,7 +154,7 @@ describe('soft delete', () => {
 
 describe('audit log', () => {
   it('state changes are audit-logged automatically via transition_conversation_state', async () => {
-    const clinic = await createTestClinic(sql, 'Audit State');
+    const clinic = await makeClinic('Audit State');
     const integration = await createTestIntegration(sql, clinic.id);
     const conv = await createTestConversation(sql, clinic.id, integration.id);
 
@@ -167,8 +176,8 @@ describe('audit log', () => {
 
 describe('cross-tenant FK guard', () => {
   it('cannot link conversation to patient from another clinic', async () => {
-    const cA = await createTestClinic(sql, 'Cross A');
-    const cB = await createTestClinic(sql, 'Cross B');
+    const cA = await makeClinic('Cross A');
+    const cB = await makeClinic('Cross B');
     const intA = await createTestIntegration(sql, cA.id);
     const patientB = await createTestPatient(sql, cB.id);
 

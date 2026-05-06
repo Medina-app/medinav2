@@ -1,24 +1,29 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   addUserToClinic,
-  cleanupAll,
   createTestClinic,
   createTestIntegration,
   createTestUser,
+  deleteTestClinic,
   ensureVaultMasterKey,
   getRlsClient,
   getServiceClient,
 } from './helpers/setup.js';
 
 const sql = getServiceClient();
+const createdClinics: string[] = [];
+async function makeClinic(name: string) {
+  const c = await createTestClinic(sql, name);
+  createdClinics.push(c.id);
+  return c;
+}
 
 beforeAll(async () => {
   await ensureVaultMasterKey(sql);
-  await cleanupAll(sql);
 });
 
 afterAll(async () => {
-  await cleanupAll(sql);
+  await Promise.all(createdClinics.map((id) => deleteTestClinic(sql, id)));
   await sql.end();
 });
 
@@ -26,8 +31,8 @@ afterAll(async () => {
 
 describe('clinic_integrations: cross-tenant isolation', () => {
   it('users only see integrations of their own clinic', async () => {
-    const clinicA = await createTestClinic(sql, 'Integrations Tenant A');
-    const clinicB = await createTestClinic(sql, 'Integrations Tenant B');
+    const clinicA = await makeClinic('Integrations Tenant A');
+    const clinicB = await makeClinic('Integrations Tenant B');
     const userA = await createTestUser(sql);
     await addUserToClinic(sql, clinicA.id, userA.id, 'member');
 
@@ -49,7 +54,7 @@ describe('clinic_integrations: cross-tenant isolation', () => {
 
 describe('clinic_integrations: RBAC insert', () => {
   it('non-admin (member) cannot insert integration', async () => {
-    const clinic = await createTestClinic(sql, 'RBAC Insert Member');
+    const clinic = await makeClinic('RBAC Insert Member');
     const member = await createTestUser(sql);
     await addUserToClinic(sql, clinic.id, member.id, 'member');
 
@@ -65,7 +70,7 @@ describe('clinic_integrations: RBAC insert', () => {
   });
 
   it('admin can insert integration', async () => {
-    const clinic = await createTestClinic(sql, 'RBAC Insert Admin');
+    const clinic = await makeClinic('RBAC Insert Admin');
     const admin = await createTestUser(sql);
     await addUserToClinic(sql, clinic.id, admin.id, 'admin');
 
@@ -86,7 +91,7 @@ describe('clinic_integrations: RBAC insert', () => {
 
 describe('clinic_integrations: RBAC update', () => {
   it('non-admin (member) cannot update integration (0 rows affected)', async () => {
-    const clinic = await createTestClinic(sql, 'RBAC Update Block');
+    const clinic = await makeClinic('RBAC Update Block');
     const member = await createTestUser(sql);
     await addUserToClinic(sql, clinic.id, member.id, 'member');
 
@@ -109,7 +114,7 @@ describe('clinic_integrations: RBAC update', () => {
 
 describe('clinic_integrations: encrypted_credentials', () => {
   it('encrypted_credentials is returned as bytea (Buffer), not plain text', async () => {
-    const clinic = await createTestClinic(sql, 'Encrypt Bytea');
+    const clinic = await makeClinic('Encrypt Bytea');
     const integration = await createTestIntegration(sql, clinic.id, {
       plainCredentials: '{"api_key":"super-secret-value"}',
     });
@@ -126,7 +131,7 @@ describe('clinic_integrations: encrypted_credentials', () => {
   });
 
   it('admin can decrypt credentials via get_integration_credential', async () => {
-    const clinic = await createTestClinic(sql, 'Decrypt Admin');
+    const clinic = await makeClinic('Decrypt Admin');
     const admin = await createTestUser(sql);
     await addUserToClinic(sql, clinic.id, admin.id, 'admin');
 
@@ -144,7 +149,7 @@ describe('clinic_integrations: encrypted_credentials', () => {
   });
 
   it('non-admin (member) cannot decrypt via get_integration_credential', async () => {
-    const clinic = await createTestClinic(sql, 'Decrypt Member Block');
+    const clinic = await makeClinic('Decrypt Member Block');
     const member = await createTestUser(sql);
     await addUserToClinic(sql, clinic.id, member.id, 'member');
 
@@ -163,7 +168,7 @@ describe('clinic_integrations: encrypted_credentials', () => {
   // ── 0015: service_role-only variant for Inngest worker ──────────────────────
 
   it('service_role decrypts via get_integration_credential_internal (worker path)', async () => {
-    const clinic = await createTestClinic(sql, 'Decrypt Internal Worker');
+    const clinic = await makeClinic('Decrypt Internal Worker');
     const plainCredentials = '{"api_key":"worker-decrypt-ok"}';
     const integration = await createTestIntegration(sql, clinic.id, { plainCredentials });
 
@@ -178,7 +183,7 @@ describe('clinic_integrations: encrypted_credentials', () => {
   });
 
   it('authenticated user denied on get_integration_credential_internal (grant revoked)', async () => {
-    const clinic = await createTestClinic(sql, 'Decrypt Internal Denied');
+    const clinic = await makeClinic('Decrypt Internal Denied');
     const admin = await createTestUser(sql);
     await addUserToClinic(sql, clinic.id, admin.id, 'admin');
     const integration = await createTestIntegration(sql, clinic.id);
@@ -201,7 +206,7 @@ describe('clinic_integrations: encrypted_credentials', () => {
 
 describe('clinic_integrations: automatic audit log', () => {
   it('INSERT creates an audit log entry with action integration.created', async () => {
-    const clinic = await createTestClinic(sql, 'Audit Integration');
+    const clinic = await makeClinic('Audit Integration');
 
     const before = await sql<{ count: string }[]>`
       SELECT COUNT(*) AS count FROM audit_logs WHERE clinic_id = ${clinic.id}

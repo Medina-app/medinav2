@@ -1,28 +1,30 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import {
   addUserToClinic,
-  cleanupAll,
   createTestClinic,
   createTestUser,
+  deleteTestClinic,
   getRlsClient,
   getServiceClient,
 } from './helpers/setup.js';
 
 const sql = getServiceClient();
-
-beforeAll(async () => {
-  await cleanupAll(sql);
-});
+const createdClinics: string[] = [];
+async function makeClinic(name: string) {
+  const c = await createTestClinic(sql, name);
+  createdClinics.push(c.id);
+  return c;
+}
 
 afterAll(async () => {
-  await cleanupAll(sql);
+  await Promise.all(createdClinics.map((id) => deleteTestClinic(sql, id)));
   await sql.end();
 });
 
 describe('clinic_members: cross-tenant isolation', () => {
   it('user of clinic A cannot see members of clinic B', async () => {
-    const clinicA = await createTestClinic(sql, 'Members A');
-    const clinicB = await createTestClinic(sql, 'Members B');
+    const clinicA = await makeClinic('Members A');
+    const clinicB = await makeClinic('Members B');
     const userA = await createTestUser(sql);
     const userB = await createTestUser(sql);
     await addUserToClinic(sql, clinicA.id, userA.id, 'member');
@@ -43,7 +45,7 @@ describe('clinic_members: cross-tenant isolation', () => {
 
 describe('clinic_members: role permissions', () => {
   it('owner can add a new member', async () => {
-    const clinic = await createTestClinic(sql, 'Role Add');
+    const clinic = await makeClinic('Role Add');
     const owner = await createTestUser(sql);
     const newUser = await createTestUser(sql);
     await addUserToClinic(sql, clinic.id, owner.id, 'owner');
@@ -60,7 +62,7 @@ describe('clinic_members: role permissions', () => {
   });
 
   it('plain member cannot add another member', async () => {
-    const clinic = await createTestClinic(sql, 'Role Block');
+    const clinic = await makeClinic('Role Block');
     const member = await createTestUser(sql);
     const stranger = await createTestUser(sql);
     await addUserToClinic(sql, clinic.id, member.id, 'member');
@@ -77,7 +79,7 @@ describe('clinic_members: role permissions', () => {
   });
 
   it('enforce_at_least_one_owner blocks soft-deleting the last owner', async () => {
-    const clinic = await createTestClinic(sql, 'Last Owner');
+    const clinic = await makeClinic('Last Owner');
     const owner = await createTestUser(sql);
     await addUserToClinic(sql, clinic.id, owner.id, 'owner');
 

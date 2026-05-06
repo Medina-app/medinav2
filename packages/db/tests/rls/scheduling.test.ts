@@ -1,7 +1,6 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import {
   addUserToClinic,
-  cleanupAll,
   createTestAppointment,
   createTestClinic,
   createTestConversation,
@@ -12,20 +11,30 @@ import {
   createTestPipeline,
   createTestPipelineStage,
   createTestUser,
+  deleteTestClinic,
   getRlsClient,
   getServiceClient,
 } from './helpers/setup.js';
 
 const sql = getServiceClient();
-beforeAll(async () => { await cleanupAll(sql); });
-afterAll(async () => { await cleanupAll(sql); await sql.end(); });
+const createdClinics: string[] = [];
+async function makeClinic(name: string) {
+  const c = await createTestClinic(sql, name);
+  createdClinics.push(c.id);
+  return c;
+}
+
+afterAll(async () => {
+  await Promise.all(createdClinics.map((id) => deleteTestClinic(sql, id)));
+  await sql.end();
+});
 
 // ─── Cross-tenant isolation ────────────────────────────────────────────────────
 
 describe('scheduling: cross-tenant isolation', () => {
   it('users only see doctors/appointments of their clinics', async () => {
-    const cA = await createTestClinic(sql, 'Sched Iso A');
-    const cB = await createTestClinic(sql, 'Sched Iso B');
+    const cA = await makeClinic('Sched Iso A');
+    const cB = await makeClinic('Sched Iso B');
     const uA = await createTestUser(sql);
     await addUserToClinic(sql, cA.id, uA.id);
 
@@ -49,7 +58,7 @@ describe('scheduling: cross-tenant isolation', () => {
 
 describe('doctors: permissions', () => {
   it('non-admin cannot insert doctor', async () => {
-    const clinic = await createTestClinic(sql, 'Doctor Insert Denied');
+    const clinic = await makeClinic('Doctor Insert Denied');
     const member = await createTestUser(sql);
     await addUserToClinic(sql, clinic.id, member.id, 'member');
 
@@ -61,7 +70,7 @@ describe('doctors: permissions', () => {
   });
 
   it('non-admin cannot update doctor', async () => {
-    const clinic = await createTestClinic(sql, 'Doctor Update Denied');
+    const clinic = await makeClinic('Doctor Update Denied');
     const member = await createTestUser(sql);
     await addUserToClinic(sql, clinic.id, member.id, 'member');
     const doctor = await createTestDoctor(sql, clinic.id);
@@ -75,7 +84,7 @@ describe('doctors: permissions', () => {
   });
 
   it('members can read all doctors of their clinic', async () => {
-    const clinic = await createTestClinic(sql, 'Doctor Read All');
+    const clinic = await makeClinic('Doctor Read All');
     const member = await createTestUser(sql);
     await addUserToClinic(sql, clinic.id, member.id, 'member');
     const d1 = await createTestDoctor(sql, clinic.id, { fullName: 'Dr One' });
@@ -88,7 +97,7 @@ describe('doctors: permissions', () => {
   });
 
   it('admin can insert doctor', async () => {
-    const clinic = await createTestClinic(sql, 'Doctor Insert Admin');
+    const clinic = await makeClinic('Doctor Insert Admin');
     const admin = await createTestUser(sql);
     await addUserToClinic(sql, clinic.id, admin.id, 'admin');
 
@@ -107,7 +116,7 @@ describe('doctors: permissions', () => {
 
 describe('appointments: permissions', () => {
   it('member can create appointment', async () => {
-    const clinic = await createTestClinic(sql, 'Appt Create');
+    const clinic = await makeClinic('Appt Create');
     const member = await createTestUser(sql);
     await addUserToClinic(sql, clinic.id, member.id, 'member');
     const doctor = await createTestDoctor(sql, clinic.id);
@@ -125,7 +134,7 @@ describe('appointments: permissions', () => {
   });
 
   it('member can update appointment', async () => {
-    const clinic = await createTestClinic(sql, 'Appt Update');
+    const clinic = await makeClinic('Appt Update');
     const member = await createTestUser(sql);
     await addUserToClinic(sql, clinic.id, member.id, 'member');
     const doctor = await createTestDoctor(sql, clinic.id);
@@ -140,7 +149,7 @@ describe('appointments: permissions', () => {
   });
 
   it('members can read all appointments of their clinic', async () => {
-    const clinic = await createTestClinic(sql, 'Appt Read All');
+    const clinic = await makeClinic('Appt Read All');
     const member = await createTestUser(sql);
     await addUserToClinic(sql, clinic.id, member.id, 'member');
     const doctor = await createTestDoctor(sql, clinic.id);
@@ -154,7 +163,7 @@ describe('appointments: permissions', () => {
   });
 
   it('non-admin cannot delete appointment', async () => {
-    const clinic = await createTestClinic(sql, 'Appt Delete Denied');
+    const clinic = await makeClinic('Appt Delete Denied');
     const member = await createTestUser(sql);
     await addUserToClinic(sql, clinic.id, member.id, 'member');
     const doctor = await createTestDoctor(sql, clinic.id);
@@ -171,8 +180,8 @@ describe('appointments: permissions', () => {
 
 describe('appointments: cross-tenant FK guards', () => {
   it('appointment.doctor_id must match same clinic', async () => {
-    const cA = await createTestClinic(sql, 'Appt Doc FK A');
-    const cB = await createTestClinic(sql, 'Appt Doc FK B');
+    const cA = await makeClinic('Appt Doc FK A');
+    const cB = await makeClinic('Appt Doc FK B');
     const dB = await createTestDoctor(sql, cB.id);
     const startAt = new Date(Date.now() + 86400000).toISOString();
     const endAt = new Date(Date.now() + 86400000 + 3600000).toISOString();
@@ -186,8 +195,8 @@ describe('appointments: cross-tenant FK guards', () => {
   });
 
   it('appointment.patient_id must match same clinic', async () => {
-    const cA = await createTestClinic(sql, 'Appt Pat FK A');
-    const cB = await createTestClinic(sql, 'Appt Pat FK B');
+    const cA = await makeClinic('Appt Pat FK A');
+    const cB = await makeClinic('Appt Pat FK B');
     const dA = await createTestDoctor(sql, cA.id);
     const patB = await createTestPatient(sql, cB.id);
     const startAt = new Date(Date.now() + 86400000).toISOString();
@@ -202,8 +211,8 @@ describe('appointments: cross-tenant FK guards', () => {
   });
 
   it('appointment.conversation_id must match same clinic (if NOT NULL)', async () => {
-    const cA = await createTestClinic(sql, 'Appt Conv FK A');
-    const cB = await createTestClinic(sql, 'Appt Conv FK B');
+    const cA = await makeClinic('Appt Conv FK A');
+    const cB = await makeClinic('Appt Conv FK B');
     const dA = await createTestDoctor(sql, cA.id);
     const intB = await createTestIntegration(sql, cB.id);
     const convB = await createTestConversation(sql, cB.id, intB.id);
@@ -219,8 +228,8 @@ describe('appointments: cross-tenant FK guards', () => {
   });
 
   it('appointment.deal_id must match same clinic (if NOT NULL)', async () => {
-    const cA = await createTestClinic(sql, 'Appt Deal FK A');
-    const cB = await createTestClinic(sql, 'Appt Deal FK B');
+    const cA = await makeClinic('Appt Deal FK A');
+    const cB = await makeClinic('Appt Deal FK B');
     const dA = await createTestDoctor(sql, cA.id);
     const pipB = await createTestPipeline(sql, cB.id);
     const stgB = await createTestPipelineStage(sql, cB.id, pipB.id);
@@ -241,7 +250,7 @@ describe('appointments: cross-tenant FK guards', () => {
 
 describe('appointment_reminders: cascade and clinic validation', () => {
   it('reminders are deleted when appointment is deleted (ON DELETE CASCADE)', async () => {
-    const clinic = await createTestClinic(sql, 'Reminder Cascade');
+    const clinic = await makeClinic('Reminder Cascade');
     const doctor = await createTestDoctor(sql, clinic.id);
     const appt = await createTestAppointment(sql, clinic.id, doctor.id);
 
@@ -259,8 +268,8 @@ describe('appointment_reminders: cascade and clinic validation', () => {
   });
 
   it('reminder.clinic_id must match appointment.clinic_id', async () => {
-    const cA = await createTestClinic(sql, 'Reminder Clinic FK A');
-    const cB = await createTestClinic(sql, 'Reminder Clinic FK B');
+    const cA = await makeClinic('Reminder Clinic FK A');
+    const cB = await makeClinic('Reminder Clinic FK B');
     const doctor = await createTestDoctor(sql, cA.id);
     const appt = await createTestAppointment(sql, cA.id, doctor.id);
 
@@ -273,7 +282,7 @@ describe('appointment_reminders: cascade and clinic validation', () => {
   });
 
   it('members cannot insert reminder directly (service_role only for write)', async () => {
-    const clinic = await createTestClinic(sql, 'Reminder Insert Denied');
+    const clinic = await makeClinic('Reminder Insert Denied');
     const member = await createTestUser(sql);
     await addUserToClinic(sql, clinic.id, member.id, 'member');
     const doctor = await createTestDoctor(sql, clinic.id);
@@ -294,7 +303,7 @@ describe('appointment_reminders: cascade and clinic validation', () => {
 
 describe('appointment: audit log on status change', () => {
   it('audit log entry is created when appointment status changes', async () => {
-    const clinic = await createTestClinic(sql, 'Audit Status');
+    const clinic = await makeClinic('Audit Status');
     const doctor = await createTestDoctor(sql, clinic.id);
     const appt = await createTestAppointment(sql, clinic.id, doctor.id);
 
@@ -319,7 +328,7 @@ describe('appointment: audit log on status change', () => {
 
 describe('transition_appointment_status', () => {
   it('valid transitions work: scheduled → confirmed → in_progress → completed', async () => {
-    const clinic = await createTestClinic(sql, 'Transition Valid');
+    const clinic = await makeClinic('Transition Valid');
     const doctor = await createTestDoctor(sql, clinic.id);
     const appt = await createTestAppointment(sql, clinic.id, doctor.id);
 
@@ -341,7 +350,7 @@ describe('transition_appointment_status', () => {
   });
 
   it('invalid transition raises exception', async () => {
-    const clinic = await createTestClinic(sql, 'Transition Invalid');
+    const clinic = await makeClinic('Transition Invalid');
     const doctor = await createTestDoctor(sql, clinic.id);
     const appt = await createTestAppointment(sql, clinic.id, doctor.id);
 
@@ -351,7 +360,7 @@ describe('transition_appointment_status', () => {
   });
 
   it('terminal status cannot be transitioned further', async () => {
-    const clinic = await createTestClinic(sql, 'Transition Terminal');
+    const clinic = await makeClinic('Transition Terminal');
     const doctor = await createTestDoctor(sql, clinic.id);
     const appt = await createTestAppointment(sql, clinic.id, doctor.id);
 
@@ -365,7 +374,7 @@ describe('transition_appointment_status', () => {
   });
 
   it('cancelling appointment cancels all scheduled reminders', async () => {
-    const clinic = await createTestClinic(sql, 'Cancel Reminders');
+    const clinic = await makeClinic('Cancel Reminders');
     const doctor = await createTestDoctor(sql, clinic.id);
     const appt = await createTestAppointment(sql, clinic.id, doctor.id);
 

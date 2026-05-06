@@ -12,6 +12,9 @@ export default defineConfig({
       concurrent: false,
     },
     testTimeout: 30000,
-    hookTimeout: 30000,
+    // Bumped for the issue #5 refactor: afterAll now loops through 5–28
+    // tracked clinics and runs ~18 child DELETEs per clinic. Parallelization
+    // helps but FK ordering inside a clinic must stay serial.
+    hookTimeout: 120000,
   },
 });
