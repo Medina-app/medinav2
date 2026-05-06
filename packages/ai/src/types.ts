@@ -1,4 +1,5 @@
 import type { Agent } from '@mastra/core/agent'
+import type { SupabaseClient } from '@supabase/supabase-js'
 
 export interface AgentConfig {
   id: string
@@ -22,10 +23,17 @@ export interface RetrievedChunk {
   similarity: number
 }
 
+/**
+ * Closure context every tool receives at construction time. Tools must use
+ * `supabase` (service role) for any DB interaction so RLS doesn't block them.
+ * `clinicId` and `conversationId` are required — every tool runs inside a
+ * dispatch with those values bound.
+ */
 export interface ToolContext {
   clinicId: string
+  conversationId: string
   patientId?: string
-  conversationId?: string
+  supabase: SupabaseClient
 }
 
 export interface AgentResponse {
