@@ -3,20 +3,28 @@ import type { Conversation, Message } from '@medina/db';
 import type { StatusUpdateEvent } from './types';
 import { mapConversation, mapMessage } from './mappers';
 
+export type ConversationInitialState = 'ai_handling' | 'waiting_human';
+
 export type GetOrCreateConversationArgs = {
   clinicId: string;
   integrationId: string;
   channel: 'whatsapp';
   externalId: string;
   patientId: string | null;
+  /**
+   * State applied only on CREATE. Existing conversations keep their state.
+   * Default 'waiting_human'; AI-1 webhook passes 'ai_handling' when the
+   * clinic has a published agent_config so inbound messages auto-dispatch.
+   */
+  initialState?: ConversationInitialState;
 };
 
 /**
  * Idempotent on (clinic_id, integration_id, external_id) thanks to the
  * partial unique index `idx_conversations_clinic_integration_external_unique`.
- * Default state for new conversations is 'waiting_human' so the inbox UI
- * picks them up — agent-driven flows in CHAT-3+ will INSERT with
- * 'ai_handling' instead.
+ * Default state for new conversations is 'waiting_human'; pass
+ * initialState='ai_handling' from the webhook adapter when there's a
+ * published agent_config for the clinic.
  */
 export async function getOrCreateConversation(
   sb: SupabaseClient,
@@ -41,7 +49,7 @@ export async function getOrCreateConversation(
       channel: a.channel,
       external_id: a.externalId,
       patient_id: a.patientId,
-      state: 'waiting_human',
+      state: a.initialState ?? 'waiting_human',
     })
     .select('*')
     .single();
