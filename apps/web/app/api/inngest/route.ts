@@ -5,7 +5,10 @@ import {
   onProcessOutboundFailure,
 } from '@/lib/inngest/functions/process-outbound-message';
 import { processMessageStatus } from '@/lib/inngest/functions/process-message-status';
-import { dispatchAiAgent } from '@/lib/inngest/functions/dispatch-ai-agent';
+import {
+  dispatchAiAgent,
+  onDispatchAiAgentFailure,
+} from '@/lib/inngest/functions/dispatch-ai-agent';
 
 // signingKey + isDev are configured on the client (lib/inngest/client.ts)
 // and inherited here, so the serve handler stays minimal.
@@ -16,5 +19,6 @@ export const { GET, POST, PUT } = serve({
     onProcessOutboundFailure,
     processMessageStatus,
     dispatchAiAgent,
+    onDispatchAiAgentFailure,
   ],
 });

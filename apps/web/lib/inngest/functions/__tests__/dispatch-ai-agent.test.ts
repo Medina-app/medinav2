@@ -2,8 +2,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { AgentDispatchSkipped } from '@medina/ai';
 import {
   dispatchAiAgentHandler,
+  onDispatchAiAgentFailureHandler,
   type DispatchAiAgentDeps,
   type DispatchAiAgentEvent,
+  type OnDispatchAiAgentFailureEvent,
+  type OnDispatchAiAgentFailureDeps,
 } from '../dispatch-ai-agent';
 
 const fakeStep = {
@@ -93,5 +96,63 @@ describe('dispatchAiAgentHandler', () => {
     fakeStep.sendEvent.mockClear();
     await expect(dispatchAiAgentHandler(baseEvent, fakeStep, deps)).rejects.toThrow();
     expect(fakeStep.sendEvent).not.toHaveBeenCalled();
+  });
+});
+
+describe('onDispatchAiAgentFailureHandler', () => {
+  function makeFailureDeps(
+    overrides: Partial<OnDispatchAiAgentFailureDeps> = {},
+  ): OnDispatchAiAgentFailureDeps {
+    return {
+      persistAiFailure: vi.fn().mockResolvedValue(undefined),
+      ...overrides,
+    };
+  }
+
+  const baseFailureEvent: OnDispatchAiAgentFailureEvent = {
+    data: {
+      function_id: 'dispatch-ai-agent',
+      event: { data: { messageId: 'msg-in-1', conversationId: 'conv-1', clinicId: 'clinic-1' } },
+      error: { message: 'rate limit exceeded' },
+      attempts: 3,
+    },
+  };
+
+  it('persists ai failure with error message + attempt count', async () => {
+    const deps = makeFailureDeps();
+    await onDispatchAiAgentFailureHandler(baseFailureEvent, deps);
+    expect(deps.persistAiFailure).toHaveBeenCalledWith({
+      conversationId: 'conv-1',
+      clinicId: 'clinic-1',
+      errorMessage: 'rate limit exceeded',
+      retryCount: 3,
+    });
+  });
+
+  it('truncates error message to 500 chars', async () => {
+    const deps = makeFailureDeps();
+    const longError = 'x'.repeat(700);
+    await onDispatchAiAgentFailureHandler(
+      {
+        ...baseFailureEvent,
+        data: { ...baseFailureEvent.data, error: { message: longError } },
+      },
+      deps,
+    );
+    const call = vi.mocked(deps.persistAiFailure).mock.calls[0]?.[0];
+    expect(call?.errorMessage.length).toBe(500);
+  });
+
+  it('defaults retryCount to 2 when attempts is undefined (matches Inngest retries=2)', async () => {
+    const deps = makeFailureDeps();
+    await onDispatchAiAgentFailureHandler(
+      {
+        ...baseFailureEvent,
+        data: { ...baseFailureEvent.data, attempts: undefined },
+      },
+      deps,
+    );
+    const call = vi.mocked(deps.persistAiFailure).mock.calls[0]?.[0];
+    expect(call?.retryCount).toBe(2);
   });
 });
