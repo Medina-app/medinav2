@@ -12,8 +12,28 @@ interface MessageBubbleProps {
 export default function MessageBubble({ message: m, onRetry }: MessageBubbleProps) {
   const isOutbound = m.direction === 'outbound';
   const isAi = m.senderType === 'ai';
-  const state = isOutbound ? getMessageVisualState(m) : null;
+  const isSystem = m.senderType === 'system';
+  const state = isOutbound && !isSystem ? getMessageVisualState(m) : null;
   const isFailed = state?.kind === 'failed';
+
+  // System messages are inbox-side events emitted by AI tools (e.g. escalation,
+  // tool failures). Render as a compact centered notice, not a chat bubble —
+  // visually distinct from patient/AI/human turns.
+  if (isSystem) {
+    return (
+      <li className="flex justify-center my-1" data-slot="system-message">
+        <div className="max-w-[85%] rounded-md px-3 py-1.5 bg-[var(--luma-bg-subtle)] border border-[var(--luma-border)] text-center">
+          <p className="text-[11.5px] text-[var(--luma-text-secondary)] whitespace-pre-wrap break-words">
+            {m.content ?? <em className="opacity-60">(sistema)</em>}
+          </p>
+          <RelativeTime
+            date={m.createdAt}
+            className="text-[10px] text-[var(--luma-text-tertiary)] mt-0.5 block"
+          />
+        </div>
+      </li>
+    );
+  }
 
   // Visual differentiation for AI-authored messages: subtle teal-tinted
   // bubble with a left-edge accent stripe + small "IA" label up top.
