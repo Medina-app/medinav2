@@ -52,6 +52,24 @@ function makeAdminSupabase(): SupabaseClient {
   );
 }
 
+// Lightweight check: does this clinic have ANY published agent_config?
+// Used by the webhook to decide initial conversation.state on creation.
+// One small SELECT per inbound; trades a query for a clean state machine
+// (clinics without agents stay on the legacy waiting_human flow).
+async function clinicHasPublishedAgent(
+  sb: SupabaseClient,
+  clinicId: string,
+): Promise<boolean> {
+  const { data } = await sb
+    .from('agent_configs')
+    .select('id')
+    .eq('clinic_id', clinicId)
+    .eq('status', 'published')
+    .limit(1)
+    .maybeSingle();
+  return !!data;
+}
+
 async function persistInbound(
   sb: SupabaseClient,
   ctx: WebhookContext,
@@ -64,12 +82,15 @@ async function persistInbound(
     inbound.patientNameHint,
   );
 
+  const hasAgent = await clinicHasPublishedAgent(sb, ctx.clinicId);
+
   const { conversation } = await getOrCreateConversation(sb, {
     clinicId: ctx.clinicId,
     integrationId: ctx.integration.id,
     channel: 'whatsapp',
     externalId: inbound.fromPhone,
     patientId: patient.id,
+    initialState: hasAgent ? 'ai_handling' : 'waiting_human',
   });
 
   const { message, created } = await addMessage(sb, {
@@ -115,6 +136,38 @@ async function persistInbound(
     const logCtx = { clinicId: ctx.clinicId, integrationId: ctx.integration.id };
     safePublish(ctx.publishEvent, `conv:${conversation.id}`, evt, logCtx);
     safePublish(ctx.publishEvent, `inbox:${ctx.clinicId}`, evt, logCtx);
+
+    // AI-1: dispatch to the Mastra agent ONLY when the conversation is
+    // currently in ai_handling AND this is a brand-new inbound. Idempotency
+    // via `ai:${messageId}` event id — webhook retries with the same
+    // external message id collapse to one Inngest invocation. Failure here
+    // does NOT fail the webhook: the message is already persisted, so a
+    // human atendente sees it normally even if the AI never fires.
+    if ((conversation as { state?: string }).state === 'ai_handling' && ctx.inngestSend) {
+      try {
+        await ctx.inngestSend({
+          name: 'ai/message.received',
+          id: `ai:${message.id}`,
+          data: {
+            messageId: message.id,
+            conversationId: conversation.id,
+            clinicId: ctx.clinicId,
+          },
+        });
+      } catch (err) {
+        console.error(
+          JSON.stringify({
+            timestamp: new Date().toISOString(),
+            level: 'error',
+            action: 'ai_dispatch_failed',
+            messageId: message.id,
+            conversationId: conversation.id,
+            clinic_id: ctx.clinicId,
+            error: err instanceof Error ? err.message : String(err),
+          }),
+        );
+      }
+    }
   }
 
   return { processed: true, reason: created ? 'message_inserted' : 'duplicate_idempotent' };
