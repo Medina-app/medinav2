@@ -41,10 +41,13 @@ export async function toggleAiHandlingAction(input: {
 
   const reason = parsed.data.newState === 'ai_handling' ? 'human_returned_to_ai' : 'human_paused_ai';
 
+  // Param names match the deployed function signature: conv_id, new_state,
+  // reason (NOT p_*). Verified via pg_get_function_arguments in prod.
+  // The previous p_* names silently failed since CHAT-3 — fix #11 in AI-2.
   const { error } = await sb.rpc('transition_conversation_state', {
-    p_conversation_id: parsed.data.conversationId,
-    p_new_state: parsed.data.newState,
-    p_reason: reason,
+    conv_id: parsed.data.conversationId,
+    new_state: parsed.data.newState,
+    reason,
   });
   if (error) return { error: error.message };
 
