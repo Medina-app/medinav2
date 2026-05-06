@@ -346,6 +346,22 @@ describe('dispatchAgent', () => {
     })
   })
 
+  it('parses temperature from PostgREST numeric (string → number) (fix #7 prod-shape)', async () => {
+    // PostgREST serializes numeric(3,2) as a string ("0.30") to preserve
+    // arbitrary precision. The dispatcher MUST coerce to number before passing
+    // to AI-SDK modelSettings, otherwise the model silently uses its default.
+    const { sb } = makeSupabase({
+      conversation: baseConv,
+      agentConfig: { ...baseCfg, temperature: '0.30' as unknown as number, max_tokens: 256 },
+    })
+    const { dispatchAgent } = await import('../src/dispatcher.js')
+    await dispatchAgent({ conversationId: 'conv-1', clinicId: 'clinic-A', messageId: 'm', supabase: sb })
+
+    const opts = mockGenerate.mock.calls[0]?.[1] as { modelSettings: { temperature: number } }
+    expect(typeof opts.modelSettings.temperature).toBe('number')
+    expect(opts.modelSettings.temperature).toBe(0.3)
+  })
+
   it('passes tools built from agent_config.tools to createAgent', async () => {
     const { sb } = makeSupabase({
       conversation: baseConv,

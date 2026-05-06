@@ -137,12 +137,19 @@ export async function dispatchAgent(args: DispatchAgentArgs): Promise<DispatchRe
       // FIX #7: pass temperature + maxTokens via Mastra's modelSettings.
       // AI-SDK v5 renamed maxTokens → maxOutputTokens; verified in
       // @mastra/core 1.32.1 agent.types.d.ts (modelSettings: CallSettings).
+      // PostgREST serializes `numeric` columns as strings (preserves arbitrary
+      // precision), so cfg.temperature comes back as e.g. "0.70". parseFloat
+      // converts it before passing to the AI-SDK which expects number.
+      // max_tokens is `integer`, returned as native number — no parsing.
+      const tempNum = typeof cfg.temperature === 'string'
+        ? parseFloat(cfg.temperature)
+        : (cfg.temperature as number)
       let result
       try {
         result = await agent.generate(messages, {
           maxSteps: MAX_STEPS,
           modelSettings: {
-            temperature: cfg.temperature,
+            temperature: tempNum,
             maxOutputTokens: cfg.max_tokens,
           },
         })
