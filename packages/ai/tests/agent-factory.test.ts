@@ -119,4 +119,37 @@ describe('createAgent', () => {
     const result = await createAgent({ clinicId: 'clinic-abc', agentName: 'triage', supabase })
     expect(result.config.name).toBe('triage')
   })
+
+  it('defaults agentName to "agente-principal" when not provided (fix #8)', async () => {
+    const { createAgent } = await import('../src/agent-factory.js')
+    const single = vi.fn().mockResolvedValue({ data: { ...baseRow, name: 'agente-principal' }, error: null })
+    const eqStatus = vi.fn().mockReturnValue({ single })
+    const eqName = vi.fn().mockReturnValue({ eq: eqStatus })
+    const eqClinic = vi.fn().mockReturnValue({ eq: eqName })
+    const select = vi.fn().mockReturnValue({ eq: eqClinic })
+    const from = vi.fn().mockReturnValue({ select })
+    const supabase = { from } as unknown as import('@supabase/supabase-js').SupabaseClient
+
+    await createAgent({ clinicId: 'clinic-abc', supabase })
+
+    // The 2nd .eq() call applies the name filter — verify it was 'agente-principal'.
+    expect(eqName).toHaveBeenCalledWith('name', 'agente-principal')
+  })
+
+  it('passes tools record to Agent constructor when provided', async () => {
+    const { createAgent } = await import('../src/agent-factory.js')
+    const supabase = makeSupabaseMock(baseRow)
+    const tools = { my_tool: { id: 'my_tool' } }
+    await createAgent({ clinicId: 'clinic-abc', supabase, tools })
+    expect(MockAgent).toHaveBeenCalledWith(expect.objectContaining({ tools }))
+  })
+
+  it('omits tools field on Agent when no tools passed', async () => {
+    const { createAgent } = await import('../src/agent-factory.js')
+    const supabase = makeSupabaseMock(baseRow)
+    await createAgent({ clinicId: 'clinic-abc', supabase })
+    const callArg = MockAgent.mock.calls[0]?.[0] as Record<string, unknown> | undefined
+    expect(callArg).toBeDefined()
+    expect('tools' in (callArg ?? {})).toBe(false)
+  })
 })
