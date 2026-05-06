@@ -1,6 +1,5 @@
 import { Agent } from '@mastra/core/agent'
-import { anthropic } from '@ai-sdk/anthropic'
-import { openai } from '@ai-sdk/openai'
+import { createOpenRouter } from '@openrouter/ai-sdk-provider'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { AgentNotFoundError, NamespacingViolationError } from './errors.js'
 import type { AgentConfig, CreateAgentResult } from './types.js'
@@ -11,11 +10,14 @@ export interface CreateAgentOpts {
   supabase: SupabaseClient
 }
 
+// All models go through OpenRouter — use the model id from agent_configs.model
+// directly (e.g. 'anthropic/claude-sonnet-4-5', 'openai/gpt-4o', 'meta-llama/...').
+// One provider, one API key, switching models becomes a config change.
 function resolveModel(modelId: string) {
-  if (modelId.startsWith('claude-')) {
-    return anthropic(modelId)
-  }
-  return openai(modelId)
+  const apiKey = process.env['OPENROUTER_API_KEY']
+  if (!apiKey) throw new Error('OPENROUTER_API_KEY not set')
+  const openrouter = createOpenRouter({ apiKey })
+  return openrouter(modelId)
 }
 
 function rowToConfig(row: Record<string, unknown>): AgentConfig {
