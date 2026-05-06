@@ -52,10 +52,13 @@ function makeAdminSupabase(): SupabaseClient {
   );
 }
 
-// Lightweight check: does this clinic have ANY published agent_config?
-// Used by the webhook to decide initial conversation.state on creation.
-// One small SELECT per inbound; trades a query for a clean state machine
-// (clinics without agents stay on the legacy waiting_human flow).
+// Lightweight check: does this clinic have a published agent_config with
+// the canonical name 'agente-principal'? Used by the webhook to decide
+// initial conversation.state on creation. The name filter MUST match
+// dispatcher.ts:71 — otherwise we'd flag conversations as ai_handling
+// for clinics whose only published agent has a different name (e.g.
+// 'triage'), and the dispatcher would skip with no_agent_config, leaving
+// the conversation stuck. Multi-agent routing lands in AI-2.
 async function clinicHasPublishedAgent(
   sb: SupabaseClient,
   clinicId: string,
@@ -65,6 +68,7 @@ async function clinicHasPublishedAgent(
     .select('id')
     .eq('clinic_id', clinicId)
     .eq('status', 'published')
+    .eq('name', 'agente-principal')
     .limit(1)
     .maybeSingle();
   return !!data;

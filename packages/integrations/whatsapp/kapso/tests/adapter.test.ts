@@ -22,8 +22,9 @@ import {
 import { kapsoAdapter } from '../src/adapter';
 
 // Build a chainable mock Supabase client. The adapter calls:
-//   - sb.from('clinic_integrations').update(...).eq(...)         (lazy phone_number_id capture)
-//   - sb.from('agent_configs').select().eq().eq().limit().maybeSingle()  (AI presence check)
+//   - sb.from('clinic_integrations').update(...).eq(...)              (lazy phone_number_id capture)
+//   - sb.from('agent_configs').select().eq().eq().eq().limit().maybeSingle()  (AI presence check;
+//     three .eq calls: clinic_id, status='published', name='agente-principal')
 // Routes by table name; default agent_configs response is null (no agent).
 function buildMockSupabase(opts: { agentRow?: Record<string, unknown> | null } = {}) {
   const updateEq = vi.fn().mockResolvedValue({ data: null, error: null });
@@ -31,7 +32,8 @@ function buildMockSupabase(opts: { agentRow?: Record<string, unknown> | null } =
 
   const agentMaybeSingle = vi.fn().mockResolvedValue({ data: opts.agentRow ?? null, error: null });
   const agentLimit = vi.fn().mockReturnValue({ maybeSingle: agentMaybeSingle });
-  const agentEqStatus = vi.fn().mockReturnValue({ limit: agentLimit });
+  const agentEqName = vi.fn().mockReturnValue({ limit: agentLimit });
+  const agentEqStatus = vi.fn().mockReturnValue({ eq: agentEqName });
   const agentEqClinic = vi.fn().mockReturnValue({ eq: agentEqStatus });
   const agentSelect = vi.fn().mockReturnValue({ eq: agentEqClinic });
   const agentChain = { select: agentSelect };
@@ -46,6 +48,7 @@ function buildMockSupabase(opts: { agentRow?: Record<string, unknown> | null } =
     updateMock: integrationsChain.update,
     eqMock: updateEq,
     agentSelectMock: agentSelect,
+    agentEqNameMock: agentEqName,
   };
 }
 
@@ -505,6 +508,51 @@ describe('kapsoAdapter.handle inbound: AI dispatch', () => {
 
     const aiCalls = inngestSend.mock.calls.filter((c) => c[0]?.name === 'ai/message.received');
     expect(aiCalls).toHaveLength(0);
+  });
+
+  it("queries agent_configs filtering by name='agente-principal' (alignment with dispatcher)", async () => {
+    const captured = buildMockSupabase({ agentRow: { id: 'cfg-1' } });
+    vi.mocked(createClient).mockReturnValue(captured.client as ReturnType<typeof createClient>);
+    vi.mocked(lookupOrCreatePatientByPhone).mockResolvedValue({
+      patient: { id: 'pat-1' } as never,
+      created: true,
+    });
+    vi.mocked(getOrCreateConversation).mockResolvedValue({
+      conversation: { id: 'conv-uuid', state: 'ai_handling' } as never,
+      created: true,
+    });
+    vi.mocked(addMessage).mockResolvedValue({ message: { id: 'msg' } as never, created: true });
+
+    await kapsoAdapter.handle(buildCtx(baseInbound, 'whatsapp.message.received'));
+
+    // Cross-check: the third .eq() call must be ('name', 'agente-principal').
+    expect(captured.agentEqNameMock).toHaveBeenCalledWith('name', 'agente-principal');
+  });
+
+  it('passes initialState=waiting_human when published agent_config exists with different name', async () => {
+    // Mock simulates the post-fix behavior: name='agente-principal' filter
+    // applied at SQL level → maybeSingle returns null because the only
+    // published agent for this clinic is, say, 'triage'. Without the fix,
+    // adapter would set ai_handling, dispatcher would skip on no_agent_config,
+    // and the conversation would be stuck.
+    const captured = buildMockSupabase({ agentRow: null });
+    vi.mocked(createClient).mockReturnValue(captured.client as ReturnType<typeof createClient>);
+    vi.mocked(lookupOrCreatePatientByPhone).mockResolvedValue({
+      patient: { id: 'pat-1' } as never,
+      created: true,
+    });
+    vi.mocked(getOrCreateConversation).mockResolvedValue({
+      conversation: { id: 'conv-uuid', state: 'waiting_human' } as never,
+      created: true,
+    });
+    vi.mocked(addMessage).mockResolvedValue({ message: { id: 'msg' } as never, created: true });
+
+    await kapsoAdapter.handle(buildCtx(baseInbound, 'whatsapp.message.received'));
+
+    expect(getOrCreateConversation).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ initialState: 'waiting_human' }),
+    );
   });
 
   it('does not crash webhook when ai dispatch throws (best-effort, log only)', async () => {
