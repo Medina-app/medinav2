@@ -44,6 +44,45 @@ describe('getOrCreateConversation', () => {
     expect(result.conversation.state).toBe('waiting_human');
   });
 
+  it('creates with state ai_handling when initialState is set (clinic has published agent)', async () => {
+    const { clinic, integration } = await makeContext('ConvAiHandling');
+    const phone = `+5511${Date.now().toString().slice(-9)}`;
+
+    const result = await getOrCreateConversation(sb, {
+      clinicId: clinic.id,
+      integrationId: integration.id,
+      channel: 'whatsapp',
+      externalId: phone,
+      patientId: null,
+      initialState: 'ai_handling',
+    });
+
+    expect(result.created).toBe(true);
+    expect(result.conversation.state).toBe('ai_handling');
+  });
+
+  it('initialState only applies on create — existing conversations keep their state', async () => {
+    const { clinic, integration } = await makeContext('ConvInitialStateNoOp');
+    const phone = `+5511${Date.now().toString().slice(-9)}`;
+    const args = {
+      clinicId: clinic.id,
+      integrationId: integration.id,
+      channel: 'whatsapp' as const,
+      externalId: phone,
+      patientId: null,
+    };
+
+    // First call: defaults to waiting_human
+    const first = await getOrCreateConversation(sb, args);
+    expect(first.conversation.state).toBe('waiting_human');
+
+    // Second call passes initialState=ai_handling, but row already exists.
+    // Should return existing waiting_human, NOT change state.
+    const second = await getOrCreateConversation(sb, { ...args, initialState: 'ai_handling' });
+    expect(second.created).toBe(false);
+    expect(second.conversation.state).toBe('waiting_human');
+  });
+
   it('is idempotent: second call returns same id, created=false', async () => {
     const { clinic, integration } = await makeContext('ConvIdempotent');
     const phone = `+5511${Date.now().toString().slice(-9)}`;

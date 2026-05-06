@@ -21,14 +21,35 @@ import {
 } from '@medina/chat';
 import { kapsoAdapter } from '../src/adapter';
 
-// Build a chainable mock Supabase client. The adapter only calls
-// sb.from('clinic_integrations').update(...).eq(...) directly; everything
-// else is mocked at the @medina/chat boundary.
-function buildMockSupabase() {
+// Build a chainable mock Supabase client. The adapter calls:
+//   - sb.from('clinic_integrations').update(...).eq(...)              (lazy phone_number_id capture)
+//   - sb.from('agent_configs').select().eq().eq().eq().limit().maybeSingle()  (AI presence check;
+//     three .eq calls: clinic_id, status='published', name='agente-principal')
+// Routes by table name; default agent_configs response is null (no agent).
+function buildMockSupabase(opts: { agentRow?: Record<string, unknown> | null } = {}) {
   const updateEq = vi.fn().mockResolvedValue({ data: null, error: null });
-  const fromChain = { update: vi.fn().mockReturnValue({ eq: updateEq }) };
-  const from = vi.fn().mockReturnValue(fromChain);
-  return { client: { from } as unknown, fromMock: from, updateMock: fromChain.update, eqMock: updateEq };
+  const integrationsChain = { update: vi.fn().mockReturnValue({ eq: updateEq }) };
+
+  const agentMaybeSingle = vi.fn().mockResolvedValue({ data: opts.agentRow ?? null, error: null });
+  const agentLimit = vi.fn().mockReturnValue({ maybeSingle: agentMaybeSingle });
+  const agentEqName = vi.fn().mockReturnValue({ limit: agentLimit });
+  const agentEqStatus = vi.fn().mockReturnValue({ eq: agentEqName });
+  const agentEqClinic = vi.fn().mockReturnValue({ eq: agentEqStatus });
+  const agentSelect = vi.fn().mockReturnValue({ eq: agentEqClinic });
+  const agentChain = { select: agentSelect };
+
+  const from = vi.fn().mockImplementation((table: string) => {
+    if (table === 'agent_configs') return agentChain;
+    return integrationsChain;
+  });
+  return {
+    client: { from } as unknown,
+    fromMock: from,
+    updateMock: integrationsChain.update,
+    eqMock: updateEq,
+    agentSelectMock: agentSelect,
+    agentEqNameMock: agentEqName,
+  };
 }
 
 const baseInbound = {
@@ -381,5 +402,177 @@ describe('kapsoAdapter.handle unhandled events', () => {
   it('returns processed=false when X-Webhook-Event header is missing', async () => {
     const result = await kapsoAdapter.handle(buildCtx(baseInbound, ''));
     expect(result.reason).toBe('unhandled_event');
+  });
+});
+
+describe('kapsoAdapter.handle inbound: AI dispatch', () => {
+  it('passes initialState=ai_handling to getOrCreateConversation when clinic has published agent', async () => {
+    const captured = buildMockSupabase({ agentRow: { id: 'cfg-1' } });
+    vi.mocked(createClient).mockReturnValue(captured.client as ReturnType<typeof createClient>);
+    vi.mocked(lookupOrCreatePatientByPhone).mockResolvedValue({
+      patient: { id: 'pat-1' } as never,
+      created: true,
+    });
+    vi.mocked(getOrCreateConversation).mockResolvedValue({
+      conversation: { id: 'conv-uuid', state: 'ai_handling' } as never,
+      created: true,
+    });
+    vi.mocked(addMessage).mockResolvedValue({
+      message: { id: 'msg-1' } as never,
+      created: true,
+    });
+
+    await kapsoAdapter.handle(buildCtx(baseInbound, 'whatsapp.message.received'));
+
+    expect(getOrCreateConversation).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ initialState: 'ai_handling' }),
+    );
+  });
+
+  it('passes initialState=waiting_human when clinic has NO published agent', async () => {
+    const captured = buildMockSupabase({ agentRow: null });
+    vi.mocked(createClient).mockReturnValue(captured.client as ReturnType<typeof createClient>);
+    vi.mocked(lookupOrCreatePatientByPhone).mockResolvedValue({
+      patient: { id: 'pat-1' } as never,
+      created: true,
+    });
+    vi.mocked(getOrCreateConversation).mockResolvedValue({
+      conversation: { id: 'conv-uuid', state: 'waiting_human' } as never,
+      created: true,
+    });
+    vi.mocked(addMessage).mockResolvedValue({
+      message: { id: 'msg-1' } as never,
+      created: true,
+    });
+
+    await kapsoAdapter.handle(buildCtx(baseInbound, 'whatsapp.message.received'));
+
+    expect(getOrCreateConversation).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ initialState: 'waiting_human' }),
+    );
+  });
+
+  it('dispatches ai/message.received when conversation.state=ai_handling AND message is new', async () => {
+    const captured = buildMockSupabase({ agentRow: { id: 'cfg-1' } });
+    vi.mocked(createClient).mockReturnValue(captured.client as ReturnType<typeof createClient>);
+    vi.mocked(lookupOrCreatePatientByPhone).mockResolvedValue({ patient: { id: 'pat-1' } as never, created: true });
+    vi.mocked(getOrCreateConversation).mockResolvedValue({
+      conversation: { id: 'conv-uuid', state: 'ai_handling' } as never,
+      created: true,
+    });
+    vi.mocked(addMessage).mockResolvedValue({ message: { id: 'msg-id-9' } as never, created: true });
+
+    const inngestSend = vi.fn().mockResolvedValue(undefined);
+    await kapsoAdapter.handle(buildCtx(baseInbound, 'whatsapp.message.received', {}, { inngestSend }));
+
+    expect(inngestSend).toHaveBeenCalledWith({
+      name: 'ai/message.received',
+      id: 'ai:msg-id-9',
+      data: {
+        messageId: 'msg-id-9',
+        conversationId: 'conv-uuid',
+        clinicId: 'clinic-1',
+      },
+    });
+  });
+
+  it('does NOT dispatch ai/message.received when conversation.state=waiting_human', async () => {
+    vi.mocked(lookupOrCreatePatientByPhone).mockResolvedValue({ patient: { id: 'pat' } as never, created: false });
+    vi.mocked(getOrCreateConversation).mockResolvedValue({
+      conversation: { id: 'conv', state: 'waiting_human' } as never,
+      created: true,
+    });
+    vi.mocked(addMessage).mockResolvedValue({ message: { id: 'msg' } as never, created: true });
+
+    const inngestSend = vi.fn().mockResolvedValue(undefined);
+    await kapsoAdapter.handle(buildCtx(baseInbound, 'whatsapp.message.received', {}, { inngestSend }));
+
+    // inngestSend may have been called for status updates in other tests, but this is inbound
+    // path — there should be ZERO ai/message.received dispatches.
+    const aiCalls = inngestSend.mock.calls.filter((c) => c[0]?.name === 'ai/message.received');
+    expect(aiCalls).toHaveLength(0);
+  });
+
+  it('does NOT dispatch ai/message.received when message is duplicate (created=false)', async () => {
+    vi.mocked(lookupOrCreatePatientByPhone).mockResolvedValue({ patient: { id: 'pat' } as never, created: false });
+    vi.mocked(getOrCreateConversation).mockResolvedValue({
+      conversation: { id: 'conv', state: 'ai_handling' } as never,
+      created: false,
+    });
+    vi.mocked(addMessage).mockResolvedValue({ message: { id: 'msg' } as never, created: false });
+
+    const inngestSend = vi.fn().mockResolvedValue(undefined);
+    await kapsoAdapter.handle(buildCtx(baseInbound, 'whatsapp.message.received', {}, { inngestSend }));
+
+    const aiCalls = inngestSend.mock.calls.filter((c) => c[0]?.name === 'ai/message.received');
+    expect(aiCalls).toHaveLength(0);
+  });
+
+  it("queries agent_configs filtering by name='agente-principal' (alignment with dispatcher)", async () => {
+    const captured = buildMockSupabase({ agentRow: { id: 'cfg-1' } });
+    vi.mocked(createClient).mockReturnValue(captured.client as ReturnType<typeof createClient>);
+    vi.mocked(lookupOrCreatePatientByPhone).mockResolvedValue({
+      patient: { id: 'pat-1' } as never,
+      created: true,
+    });
+    vi.mocked(getOrCreateConversation).mockResolvedValue({
+      conversation: { id: 'conv-uuid', state: 'ai_handling' } as never,
+      created: true,
+    });
+    vi.mocked(addMessage).mockResolvedValue({ message: { id: 'msg' } as never, created: true });
+
+    await kapsoAdapter.handle(buildCtx(baseInbound, 'whatsapp.message.received'));
+
+    // Cross-check: the third .eq() call must be ('name', 'agente-principal').
+    expect(captured.agentEqNameMock).toHaveBeenCalledWith('name', 'agente-principal');
+  });
+
+  it('passes initialState=waiting_human when published agent_config exists with different name', async () => {
+    // Mock simulates the post-fix behavior: name='agente-principal' filter
+    // applied at SQL level → maybeSingle returns null because the only
+    // published agent for this clinic is, say, 'triage'. Without the fix,
+    // adapter would set ai_handling, dispatcher would skip on no_agent_config,
+    // and the conversation would be stuck.
+    const captured = buildMockSupabase({ agentRow: null });
+    vi.mocked(createClient).mockReturnValue(captured.client as ReturnType<typeof createClient>);
+    vi.mocked(lookupOrCreatePatientByPhone).mockResolvedValue({
+      patient: { id: 'pat-1' } as never,
+      created: true,
+    });
+    vi.mocked(getOrCreateConversation).mockResolvedValue({
+      conversation: { id: 'conv-uuid', state: 'waiting_human' } as never,
+      created: true,
+    });
+    vi.mocked(addMessage).mockResolvedValue({ message: { id: 'msg' } as never, created: true });
+
+    await kapsoAdapter.handle(buildCtx(baseInbound, 'whatsapp.message.received'));
+
+    expect(getOrCreateConversation).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ initialState: 'waiting_human' }),
+    );
+  });
+
+  it('does not crash webhook when ai dispatch throws (best-effort, log only)', async () => {
+    const captured = buildMockSupabase({ agentRow: { id: 'cfg-1' } });
+    vi.mocked(createClient).mockReturnValue(captured.client as ReturnType<typeof createClient>);
+    vi.mocked(lookupOrCreatePatientByPhone).mockResolvedValue({ patient: { id: 'pat-1' } as never, created: true });
+    vi.mocked(getOrCreateConversation).mockResolvedValue({
+      conversation: { id: 'conv-uuid', state: 'ai_handling' } as never,
+      created: true,
+    });
+    vi.mocked(addMessage).mockResolvedValue({ message: { id: 'msg-id-x' } as never, created: true });
+
+    // First call (status path or whatever) succeeds; ai dispatch (this test) throws.
+    const inngestSend = vi.fn().mockRejectedValueOnce(new Error('inngest down'));
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const result = await kapsoAdapter.handle(buildCtx(baseInbound, 'whatsapp.message.received', {}, { inngestSend }));
+
+    expect(result).toEqual({ processed: true, reason: 'message_inserted' });
+    expect(errSpy).toHaveBeenCalled();
+    errSpy.mockRestore();
   });
 });

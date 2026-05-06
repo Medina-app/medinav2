@@ -11,20 +11,34 @@ interface MessageBubbleProps {
 
 export default function MessageBubble({ message: m, onRetry }: MessageBubbleProps) {
   const isOutbound = m.direction === 'outbound';
+  const isAi = m.senderType === 'ai';
   const state = isOutbound ? getMessageVisualState(m) : null;
   const isFailed = state?.kind === 'failed';
 
+  // Visual differentiation for AI-authored messages: subtle teal-tinted
+  // bubble with a left-edge accent stripe + small "IA" label up top.
+  // Reuses --luma-accent (teal) which already appears in the page glow,
+  // so the bubble feels native to the design system rather than tagged on.
+  const bubbleClass = isFailed
+    ? 'bg-red-50 border border-red-200 text-[var(--luma-text-primary)]'
+    : isAi
+      ? 'bg-[rgba(14,165,233,0.06)] border border-[rgba(14,165,233,0.2)] border-l-2 border-l-[var(--luma-accent)] text-[var(--luma-text-primary)]'
+      : isOutbound
+        ? 'bg-[var(--luma-accent-soft)] text-[var(--luma-text-primary)]'
+        : 'bg-[var(--luma-bg-card)] border border-[var(--luma-border)] text-[var(--luma-text-primary)]';
+
   return (
     <li className={`flex ${isOutbound ? 'justify-end' : 'justify-start'}`}>
-      <div
-        className={`max-w-[75%] rounded-[12px] px-3.5 py-2.5 ${
-          isFailed
-            ? 'bg-red-50 border border-red-200 text-[var(--luma-text-primary)]'
-            : isOutbound
-              ? 'bg-[var(--luma-accent-soft)] text-[var(--luma-text-primary)]'
-              : 'bg-[var(--luma-bg-card)] border border-[var(--luma-border)] text-[var(--luma-text-primary)]'
-        }`}
-      >
+      <div className={`max-w-[75%] rounded-[12px] px-3.5 py-2.5 ${bubbleClass}`}>
+        {isAi ? (
+          <span
+            className="inline-flex items-center gap-1 text-[10px] font-semibold tracking-wide uppercase text-[#0369a1] mb-1"
+            data-slot="ai-badge"
+          >
+            <span aria-hidden className="inline-block w-1 h-1 rounded-full bg-[var(--luma-accent)]" />
+            IA
+          </span>
+        ) : null}
         <p className="text-[13.5px] whitespace-pre-wrap break-words">
           {m.content ?? <em className="opacity-60">(sem conteúdo)</em>}
         </p>

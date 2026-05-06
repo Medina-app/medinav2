@@ -1,16 +1,19 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { AgentNotFoundError, NamespacingViolationError } from '../src/errors.js'
 
-// Mock @mastra/core Agent before any module imports
+// Mock @mastra/core/agent Agent before any module imports
 const MockAgent = vi.fn().mockImplementation((opts: unknown) => ({ _opts: opts }))
-vi.mock('@mastra/core', () => ({ Agent: MockAgent }))
+vi.mock('@mastra/core/agent', () => ({ Agent: MockAgent }))
 
-// Mock AI providers
-const mockAnthropic = vi.fn().mockReturnValue({ _provider: 'anthropic', _id: '' })
-vi.mock('@ai-sdk/anthropic', () => ({ anthropic: mockAnthropic }))
-
-const mockOpenai = vi.fn().mockReturnValue({ _provider: 'openai', _id: '' })
-vi.mock('@ai-sdk/openai', () => ({ openai: mockOpenai }))
+// Mock OpenRouter provider — createOpenRouter returns a callable that maps
+// model id → model instance. The factory itself is created per call inside
+// resolveModel(); the test asserts what was passed to that callable.
+const mockOpenrouterCallable = vi.fn().mockImplementation((modelId: string) => ({
+  _provider: 'openrouter',
+  _id: modelId,
+}))
+const mockCreateOpenRouter = vi.fn().mockReturnValue(mockOpenrouterCallable)
+vi.mock('@openrouter/ai-sdk-provider', () => ({ createOpenRouter: mockCreateOpenRouter }))
 
 // Helper: build a Supabase mock that returns a specific row or error
 function makeSupabaseMock(row: Record<string, unknown> | null, error: { message: string } | null = null) {
@@ -41,6 +44,7 @@ const baseRow = {
 describe('createAgent', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    process.env['OPENROUTER_API_KEY'] = 'test-key'
   })
 
   it('loads published agent_config for the given clinic', async () => {
@@ -68,18 +72,28 @@ describe('createAgent', () => {
     ).rejects.toThrow(NamespacingViolationError)
   })
 
-  it('uses anthropic provider for claude- prefixed model', async () => {
+  it('routes any model id through OpenRouter (anthropic/* prefix)', async () => {
     const { createAgent } = await import('../src/agent-factory.js')
-    const supabase = makeSupabaseMock({ ...baseRow, model: 'claude-sonnet-4-6' })
+    const supabase = makeSupabaseMock({ ...baseRow, model: 'anthropic/claude-sonnet-4-5' })
     await createAgent({ clinicId: 'clinic-abc', supabase })
-    expect(mockAnthropic).toHaveBeenCalledWith('claude-sonnet-4-6')
+    expect(mockCreateOpenRouter).toHaveBeenCalledWith({ apiKey: 'test-key' })
+    expect(mockOpenrouterCallable).toHaveBeenCalledWith('anthropic/claude-sonnet-4-5')
   })
 
-  it('uses openai provider for non-claude model strings', async () => {
+  it('routes any model id through OpenRouter (openai/* prefix)', async () => {
     const { createAgent } = await import('../src/agent-factory.js')
-    const supabase = makeSupabaseMock({ ...baseRow, model: 'gpt-4o-mini' })
+    const supabase = makeSupabaseMock({ ...baseRow, model: 'openai/gpt-4o-mini' })
     await createAgent({ clinicId: 'clinic-abc', supabase })
-    expect(mockOpenai).toHaveBeenCalledWith('gpt-4o-mini')
+    expect(mockOpenrouterCallable).toHaveBeenCalledWith('openai/gpt-4o-mini')
+  })
+
+  it('throws when OPENROUTER_API_KEY is missing', async () => {
+    delete process.env['OPENROUTER_API_KEY']
+    const { createAgent } = await import('../src/agent-factory.js')
+    const supabase = makeSupabaseMock({ ...baseRow })
+    await expect(createAgent({ clinicId: 'clinic-abc', supabase })).rejects.toThrow(
+      'OPENROUTER_API_KEY not set'
+    )
   })
 
   it('returns config with parsed temperature as number', async () => {

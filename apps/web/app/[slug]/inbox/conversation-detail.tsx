@@ -8,6 +8,7 @@ import { toast } from 'sonner';
 import { buildConversationChannel } from '@medina/realtime';
 import SendMessageForm from './send-message-form';
 import MessageBubble from './_components/MessageBubble';
+import { AiHandlingToggle } from './_components/AiHandlingToggle';
 import { hasActiveMessages } from './_components/has-active-messages';
 import { retryFailedMessageAction } from './retry-action';
 import { useCentrifugo } from '@/lib/realtime/use-centrifugo';
@@ -96,6 +97,7 @@ export default function ConversationDetail({
           </div>
           <div className="text-[12px] text-[var(--luma-text-tertiary)] truncate">{phone}</div>
         </div>
+        <AiHandlingToggle conversationId={conversation.id} state={conversation.state} />
         <span className="text-[11px] font-medium text-[var(--luma-text-secondary)] bg-[var(--luma-bg-subtle)] rounded-full px-2.5 py-0.5">
           {stateLabel}
         </span>
