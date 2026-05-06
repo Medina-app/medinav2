@@ -97,7 +97,10 @@ export async function seedDefaultAgentConfig(clinicId: string): Promise<SeedResu
 }
 
 // CLI entry point: only runs when this file is executed directly via tsx.
-const isMain = import.meta.url === `file://${process.argv[1]}`;
+// argv[1] on Windows uses backslashes + drive letter; import.meta.url is a
+// file:// URL with forward slashes. Compare normalized basenames instead.
+const invokedAs = process.argv[1] ?? '';
+const isMain = invokedAs.endsWith('seed-agent-config.ts') || invokedAs.endsWith('seed-agent-config.js');
 if (isMain) {
   const clinicId = process.argv[2];
   if (!clinicId) {
