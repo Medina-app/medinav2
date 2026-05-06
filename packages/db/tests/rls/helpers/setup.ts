@@ -329,30 +329,79 @@ export async function createTestKnowledgeDocument(
   return row;
 }
 
-export async function cleanupAll(sql: postgres.Sql): Promise<void> {
-  // Tables may not exist yet during TDD RED phase — suppress "relation does not exist".
-  await sql`DELETE FROM appointment_reminders`.catch(() => null);
-  await sql`DELETE FROM appointments`.catch(() => null);
-  await sql`DELETE FROM doctors`.catch(() => null);
-  await sql`DELETE FROM deals`.catch(() => null);
-  await sql`DELETE FROM pipeline_stages`.catch(() => null);
-  await sql`DELETE FROM pipelines`.catch(() => null);
-  await sql`DELETE FROM messages`.catch(() => null);
-  await sql`DELETE FROM conversations`.catch(() => null);
-  await sql`DELETE FROM knowledge_chunks`.catch(() => null);
-  await sql`DELETE FROM knowledge_documents`.catch(() => null);
-  await sql`DELETE FROM agent_configs`.catch(() => null);
-  // Two-step: mark as deleted (fires audit trigger), then actually delete.
-  // The trigger only fires WHEN (OLD.deleted_at IS NULL), so the second DELETE is safe.
-  await sql`UPDATE patients SET deleted_at = NOW() WHERE deleted_at IS NULL`;
-  await sql`DELETE FROM patients`;
-  await sql`UPDATE clinic_integrations SET deleted_at = NOW() WHERE deleted_at IS NULL`;
-  await sql`DELETE FROM clinic_integrations`;
-  // Delete audit_logs AFTER integrations: the soft-delete UPDATE above fires the audit
-  // trigger and creates new rows; deleting audit_logs first would leave orphans that
-  // block the clinics DELETE via FK constraint.
-  await sql`DELETE FROM audit_logs`;
-  await sql`DELETE FROM clinic_members`;
-  await sql`DELETE FROM clinics`;
-  await sql`DELETE FROM auth.users WHERE email LIKE '%@medina-test.internal'`;
+/**
+ * Deletes ONLY the rows tied to a single clinic (and the clinic itself).
+ * Use in afterAll to clean up exactly what the test created — never touches
+ * other clinics' data, so dev fixtures and other test runs survive.
+ *
+ * Order matters: deepest children first, parent last. Each step is best-effort
+ * with try/catch so a partial leak from a crashed test doesn't cascade-block
+ * subsequent runs.
+ */
+export async function deleteTestClinic(sql: postgres.Sql, clinicId: string): Promise<void> {
+  const tryStep = async (label: string, op: () => Promise<unknown>): Promise<void> => {
+    try {
+      await op();
+    } catch (e) {
+      // Swallow "relation does not exist" during TDD on tables not yet created.
+      // Real FK errors will surface on later runs when tests recreate the same row.
+      console.warn(`deleteTestClinic[${clinicId}/${label}]: ${(e as Error).message}`);
+    }
+  };
+
+  await tryStep('appointment_reminders', () => sql`DELETE FROM appointment_reminders WHERE clinic_id = ${clinicId}`);
+  await tryStep('appointments', () => sql`DELETE FROM appointments WHERE clinic_id = ${clinicId}`);
+  await tryStep('doctors', () => sql`DELETE FROM doctors WHERE clinic_id = ${clinicId}`);
+  await tryStep('deals', () => sql`DELETE FROM deals WHERE clinic_id = ${clinicId}`);
+  await tryStep('pipeline_stages', () => sql`DELETE FROM pipeline_stages WHERE clinic_id = ${clinicId}`);
+  await tryStep('pipelines', () => sql`DELETE FROM pipelines WHERE clinic_id = ${clinicId}`);
+  await tryStep('messages', () => sql`DELETE FROM messages WHERE clinic_id = ${clinicId}`);
+  await tryStep('conversations', () => sql`DELETE FROM conversations WHERE clinic_id = ${clinicId}`);
+  await tryStep('knowledge_chunks', () => sql`DELETE FROM knowledge_chunks WHERE clinic_id = ${clinicId}`);
+  await tryStep('knowledge_documents', () => sql`DELETE FROM knowledge_documents WHERE clinic_id = ${clinicId}`);
+  await tryStep('agent_configs', () => sql`DELETE FROM agent_configs WHERE clinic_id = ${clinicId}`);
+
+  // patients + clinic_integrations have soft-delete audit triggers that only
+  // fire WHEN (OLD.deleted_at IS NULL). UPDATE first to fire the trigger
+  // cleanly, then hard-DELETE.
+  await tryStep('patients:soft', () =>
+    sql`UPDATE patients SET deleted_at = NOW() WHERE clinic_id = ${clinicId} AND deleted_at IS NULL`,
+  );
+  await tryStep('patients', () => sql`DELETE FROM patients WHERE clinic_id = ${clinicId}`);
+  await tryStep('clinic_integrations:soft', () =>
+    sql`UPDATE clinic_integrations SET deleted_at = NOW() WHERE clinic_id = ${clinicId} AND deleted_at IS NULL`,
+  );
+  await tryStep('clinic_integrations', () => sql`DELETE FROM clinic_integrations WHERE clinic_id = ${clinicId}`);
+
+  // audit_logs after integrations: the soft-delete UPDATE above fires the
+  // audit trigger and adds new rows; deleting audit_logs first would leave
+  // orphans that block the clinics DELETE via FK.
+  await tryStep('audit_logs', () => sql`DELETE FROM audit_logs WHERE clinic_id = ${clinicId}`);
+  await tryStep('clinic_members', () => sql`DELETE FROM clinic_members WHERE clinic_id = ${clinicId}`);
+  await tryStep('clinics', () => sql`DELETE FROM clinics WHERE id = ${clinicId}`);
+}
+
+/**
+ * Deletes a single test auth.user. The email pattern is enforced by
+ * createTestUser so we only ever target test-issued users.
+ */
+export async function deleteTestUser(sql: postgres.Sql, userId: string): Promise<void> {
+  try {
+    await sql`DELETE FROM auth.users WHERE id = ${userId} AND email LIKE '%@medina-test.internal'`;
+  } catch (e) {
+    console.warn(`deleteTestUser[${userId}]: ${(e as Error).message}`);
+  }
+}
+
+/**
+ * @deprecated Use deleteTestClinic per-clinic instead. cleanupAll wiped
+ * EVERY row of 14 tables and ate dev/staging fixtures on every test run
+ * (issue #5). Now a no-op so existing callers stop being destructive
+ * without forcing a same-PR refactor of every test file. Will be removed
+ * once all callers in packages/db/tests/rls/* are migrated.
+ */
+export async function cleanupAll(_sql: postgres.Sql): Promise<void> {
+  console.warn(
+    'cleanupAll is deprecated and now a no-op — track createdClinics and call deleteTestClinic(sql, id) in afterAll. See issue #5.',
+  );
 }

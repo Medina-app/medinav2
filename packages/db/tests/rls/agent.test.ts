@@ -1,27 +1,36 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import {
   addUserToClinic,
-  cleanupAll,
   createTestAgentConfig,
   createTestClinic,
   createTestConversation,
   createTestIntegration,
   createTestKnowledgeDocument,
   createTestUser,
+  deleteTestClinic,
   getRlsClient,
   getServiceClient,
 } from './helpers/setup.js';
 
 const sql = getServiceClient();
-beforeAll(async () => { await cleanupAll(sql); });
-afterAll(async () => { await cleanupAll(sql); await sql.end(); });
+const createdClinics: string[] = [];
+async function makeClinic(name: string) {
+  const c = await createTestClinic(sql, name);
+  createdClinics.push(c.id);
+  return c;
+}
+
+afterAll(async () => {
+  await Promise.all(createdClinics.map((id) => deleteTestClinic(sql, id)));
+  await sql.end();
+});
 
 // ─── Cross-tenant isolation ────────────────────────────────────────────────────
 
 describe('agent_configs: cross-tenant isolation', () => {
   it('users only see agent_configs of their clinics', async () => {
-    const cA = await createTestClinic(sql, 'Agent Iso A');
-    const cB = await createTestClinic(sql, 'Agent Iso B');
+    const cA = await makeClinic('Agent Iso A');
+    const cB = await makeClinic('Agent Iso B');
     const uA = await createTestUser(sql);
     const uB = await createTestUser(sql);
     await addUserToClinic(sql, cA.id, uA.id);
@@ -41,7 +50,7 @@ describe('agent_configs: cross-tenant isolation', () => {
 
 describe('agent_configs: permissions', () => {
   it('non-admin cannot insert agent_config', async () => {
-    const clinic = await createTestClinic(sql, 'Agent Perm Insert');
+    const clinic = await makeClinic('Agent Perm Insert');
     const member = await createTestUser(sql);
     await addUserToClinic(sql, clinic.id, member.id, 'member');
 
@@ -54,7 +63,7 @@ describe('agent_configs: permissions', () => {
   });
 
   it('non-admin cannot update agent_config', async () => {
-    const clinic = await createTestClinic(sql, 'Agent Perm Update');
+    const clinic = await makeClinic('Agent Perm Update');
     const member = await createTestUser(sql);
     await addUserToClinic(sql, clinic.id, member.id, 'member');
     const cfg = await createTestAgentConfig(sql, clinic.id);
@@ -68,7 +77,7 @@ describe('agent_configs: permissions', () => {
   });
 
   it('non-admin cannot delete agent_config', async () => {
-    const clinic = await createTestClinic(sql, 'Agent Perm Delete');
+    const clinic = await makeClinic('Agent Perm Delete');
     const member = await createTestUser(sql);
     await addUserToClinic(sql, clinic.id, member.id, 'member');
     const cfg = await createTestAgentConfig(sql, clinic.id);
@@ -80,7 +89,7 @@ describe('agent_configs: permissions', () => {
   });
 
   it('admin can insert and update agent_config', async () => {
-    const clinic = await createTestClinic(sql, 'Agent Admin Write');
+    const clinic = await makeClinic('Agent Admin Write');
     const admin = await createTestUser(sql);
     await addUserToClinic(sql, clinic.id, admin.id, 'admin');
 
@@ -100,7 +109,7 @@ describe('agent_configs: permissions', () => {
 
 describe('agent_configs: versioning', () => {
   it('version auto-increments per clinic+name', async () => {
-    const clinic = await createTestClinic(sql, 'Agent Versioning');
+    const clinic = await makeClinic('Agent Versioning');
     const v1 = await createTestAgentConfig(sql, clinic.id, { name: 'agente-versao' });
     const v2 = await createTestAgentConfig(sql, clinic.id, { name: 'agente-versao' });
     const v3 = await createTestAgentConfig(sql, clinic.id, { name: 'agente-versao' });
@@ -111,7 +120,7 @@ describe('agent_configs: versioning', () => {
   });
 
   it('admin can publish agent_config — only one published per clinic+name at a time', async () => {
-    const clinic = await createTestClinic(sql, 'Agent Publish');
+    const clinic = await makeClinic('Agent Publish');
     const admin = await createTestUser(sql);
     await addUserToClinic(sql, clinic.id, admin.id, 'admin');
 
@@ -139,7 +148,7 @@ describe('agent_configs: versioning', () => {
   });
 
   it('publishing new version archives previous published version automatically', async () => {
-    const clinic = await createTestClinic(sql, 'Agent Archive Old');
+    const clinic = await makeClinic('Agent Archive Old');
     const admin = await createTestUser(sql);
     await addUserToClinic(sql, clinic.id, admin.id, 'admin');
 
@@ -170,7 +179,7 @@ describe('agent_configs: versioning', () => {
 
 describe('messages: agent_config_id validation', () => {
   it('draft cannot be referenced by messages.agent_config_id (only published)', async () => {
-    const clinic = await createTestClinic(sql, 'Msg Draft Agent');
+    const clinic = await makeClinic('Msg Draft Agent');
     const integration = await createTestIntegration(sql, clinic.id);
     const conv = await createTestConversation(sql, clinic.id, integration.id);
 
@@ -183,8 +192,8 @@ describe('messages: agent_config_id validation', () => {
   });
 
   it('published agent_config from different clinic rejected in messages', async () => {
-    const cA = await createTestClinic(sql, 'Msg Agent XTenant A');
-    const cB = await createTestClinic(sql, 'Msg Agent XTenant B');
+    const cA = await makeClinic('Msg Agent XTenant A');
+    const cB = await makeClinic('Msg Agent XTenant B');
     const adminB = await createTestUser(sql);
     await addUserToClinic(sql, cB.id, adminB.id, 'admin');
     const intA = await createTestIntegration(sql, cA.id);
@@ -207,7 +216,7 @@ describe('messages: agent_config_id validation', () => {
 
 describe('knowledge_documents: permissions', () => {
   it('members can read knowledge_documents', async () => {
-    const clinic = await createTestClinic(sql, 'KDoc Read');
+    const clinic = await makeClinic('KDoc Read');
     const member = await createTestUser(sql);
     await addUserToClinic(sql, clinic.id, member.id, 'member');
     const doc = await createTestKnowledgeDocument(sql, clinic.id, { title: 'Handbook' });
@@ -219,7 +228,7 @@ describe('knowledge_documents: permissions', () => {
   });
 
   it('non-admin cannot write knowledge_documents', async () => {
-    const clinic = await createTestClinic(sql, 'KDoc Write Denied');
+    const clinic = await makeClinic('KDoc Write Denied');
     const member = await createTestUser(sql);
     await addUserToClinic(sql, clinic.id, member.id, 'member');
 
@@ -232,7 +241,7 @@ describe('knowledge_documents: permissions', () => {
   });
 
   it('admins can write knowledge_documents', async () => {
-    const clinic = await createTestClinic(sql, 'KDoc Admin Write');
+    const clinic = await makeClinic('KDoc Admin Write');
     const admin = await createTestUser(sql);
     await addUserToClinic(sql, clinic.id, admin.id, 'admin');
 
@@ -251,7 +260,7 @@ describe('knowledge_documents: permissions', () => {
 
 describe('knowledge_chunks: cross-tenant isolation', () => {
   it('members can read knowledge_chunks of their clinic', async () => {
-    const clinic = await createTestClinic(sql, 'KChunk Read');
+    const clinic = await makeClinic('KChunk Read');
     const member = await createTestUser(sql);
     await addUserToClinic(sql, clinic.id, member.id, 'member');
     const doc = await createTestKnowledgeDocument(sql, clinic.id);
@@ -272,8 +281,8 @@ describe('knowledge_chunks: cross-tenant isolation', () => {
   });
 
   it('knowledge_chunks: cross-tenant isolation — members cannot see chunks of other clinics', async () => {
-    const cA = await createTestClinic(sql, 'KChunk Iso A');
-    const cB = await createTestClinic(sql, 'KChunk Iso B');
+    const cA = await makeClinic('KChunk Iso A');
+    const cB = await makeClinic('KChunk Iso B');
     const uA = await createTestUser(sql);
     await addUserToClinic(sql, cA.id, uA.id, 'member');
 
@@ -294,8 +303,8 @@ describe('knowledge_chunks: cross-tenant isolation', () => {
   });
 
   it('knowledge_chunks.document_id must match same clinic', async () => {
-    const cA = await createTestClinic(sql, 'KChunk XTenant Doc A');
-    const cB = await createTestClinic(sql, 'KChunk XTenant Doc B');
+    const cA = await makeClinic('KChunk XTenant Doc A');
+    const cB = await makeClinic('KChunk XTenant Doc B');
     const docB = await createTestKnowledgeDocument(sql, cB.id);
     const embedding = `[${Array(1536).fill(0).join(',')}]`;
 
@@ -311,8 +320,8 @@ describe('knowledge_chunks: cross-tenant isolation', () => {
 
 describe('search_knowledge_chunks: vector similarity', () => {
   it('vector similarity search returns only chunks from same clinic', async () => {
-    const cA = await createTestClinic(sql, 'Vector Search A');
-    const cB = await createTestClinic(sql, 'Vector Search B');
+    const cA = await makeClinic('Vector Search A');
+    const cB = await makeClinic('Vector Search B');
     const uA = await createTestUser(sql);
     await addUserToClinic(sql, cA.id, uA.id, 'member');
 
@@ -348,7 +357,7 @@ describe('search_knowledge_chunks: vector similarity', () => {
 
 describe('audit log: agent_config status changes', () => {
   it('audit log is written automatically when agent_config status changes', async () => {
-    const clinic = await createTestClinic(sql, 'Agent Audit');
+    const clinic = await makeClinic('Agent Audit');
     const admin = await createTestUser(sql);
     await addUserToClinic(sql, clinic.id, admin.id, 'admin');
 

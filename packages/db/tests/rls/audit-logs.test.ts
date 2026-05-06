@@ -1,21 +1,23 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import {
   addUserToClinic,
-  cleanupAll,
   createTestClinic,
   createTestUser,
+  deleteTestClinic,
   getRlsClient,
   getServiceClient,
 } from './helpers/setup.js';
 
 const sql = getServiceClient();
-
-beforeAll(async () => {
-  await cleanupAll(sql);
-});
+const createdClinics: string[] = [];
+async function makeClinic(name: string) {
+  const c = await createTestClinic(sql, name);
+  createdClinics.push(c.id);
+  return c;
+}
 
 afterAll(async () => {
-  await cleanupAll(sql);
+  await Promise.all(createdClinics.map((id) => deleteTestClinic(sql, id)));
   await sql.end();
 });
 
@@ -28,7 +30,7 @@ async function seedAuditLog(clinicId: string, userId: string): Promise<void> {
 
 describe('audit_logs: non-admin cannot read', () => {
   it('plain member sees 0 audit log rows', async () => {
-    const clinic = await createTestClinic(sql, 'Audit Member');
+    const clinic = await makeClinic('Audit Member');
     const member = await createTestUser(sql);
     await addUserToClinic(sql, clinic.id, member.id, 'member');
     await seedAuditLog(clinic.id, member.id);
@@ -41,7 +43,7 @@ describe('audit_logs: non-admin cannot read', () => {
   });
 
   it('admin can read audit logs', async () => {
-    const clinic = await createTestClinic(sql, 'Audit Admin');
+    const clinic = await makeClinic('Audit Admin');
     const admin = await createTestUser(sql);
     await addUserToClinic(sql, clinic.id, admin.id, 'admin');
     await seedAuditLog(clinic.id, admin.id);
@@ -56,8 +58,8 @@ describe('audit_logs: non-admin cannot read', () => {
 
 describe('audit_logs: tenant isolation', () => {
   it('admin of clinic A cannot see audit logs of clinic B', async () => {
-    const clinicA = await createTestClinic(sql, 'Audit Isolation A');
-    const clinicB = await createTestClinic(sql, 'Audit Isolation B');
+    const clinicA = await makeClinic('Audit Isolation A');
+    const clinicB = await makeClinic('Audit Isolation B');
     const adminA = await createTestUser(sql);
     const userB = await createTestUser(sql);
     await addUserToClinic(sql, clinicA.id, adminA.id, 'admin');

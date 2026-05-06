@@ -1,23 +1,36 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import {
   addUserToClinic,
-  cleanupAll,
   createTestClinic,
   createTestPatient,
   createTestUser,
+  deleteTestClinic,
   ensureVaultMasterKey,
   getRlsClient,
   getServiceClient,
 } from './helpers/setup.js';
 
 const sql = getServiceClient();
-beforeAll(async () => { await ensureVaultMasterKey(sql); await cleanupAll(sql); });
-afterAll(async () => { await cleanupAll(sql); await sql.end(); });
+const createdClinics: string[] = [];
+async function makeClinic(name: string) {
+  const c = await createTestClinic(sql, name);
+  createdClinics.push(c.id);
+  return c;
+}
+
+beforeAll(async () => {
+  await ensureVaultMasterKey(sql);
+});
+
+afterAll(async () => {
+  await Promise.all(createdClinics.map((id) => deleteTestClinic(sql, id)));
+  await sql.end();
+});
 
 describe('patients: cross-tenant isolation', () => {
   it('users only see patients of their clinic', async () => {
-    const cA = await createTestClinic(sql, 'Pat A');
-    const cB = await createTestClinic(sql, 'Pat B');
+    const cA = await makeClinic('Pat A');
+    const cB = await makeClinic('Pat B');
     const uA = await createTestUser(sql);
     const uB = await createTestUser(sql);
     await addUserToClinic(sql, cA.id, uA.id);
@@ -34,7 +47,7 @@ describe('patients: cross-tenant isolation', () => {
 
 describe('patients: insert permissions', () => {
   it('non-member cannot insert patient', async () => {
-    const clinic = await createTestClinic(sql, 'Pat NM');
+    const clinic = await makeClinic('Pat NM');
     const stranger = await createTestUser(sql);
     await expect(
       getRlsClient(sql, stranger.id).query((tx) =>
@@ -44,7 +57,7 @@ describe('patients: insert permissions', () => {
   });
 
   it('member can insert patient', async () => {
-    const clinic = await createTestClinic(sql, 'Pat Mem');
+    const clinic = await makeClinic('Pat Mem');
     const member = await createTestUser(sql);
     await addUserToClinic(sql, clinic.id, member.id, 'member');
     await expect(
@@ -57,7 +70,7 @@ describe('patients: insert permissions', () => {
 
 describe('patients: soft delete', () => {
   it('deleted_at is set, row filtered from SELECT', async () => {
-    const clinic = await createTestClinic(sql, 'Pat SD');
+    const clinic = await makeClinic('Pat SD');
     const admin = await createTestUser(sql);
     await addUserToClinic(sql, clinic.id, admin.id, 'admin');
     const p = await createTestPatient(sql, clinic.id);
@@ -80,7 +93,7 @@ describe('patients: soft delete', () => {
 
 describe('patients: CPF encryption', () => {
   it('encrypted_cpf is never plain text in SELECT', async () => {
-    const clinic = await createTestClinic(sql, 'Pat CPF');
+    const clinic = await makeClinic('Pat CPF');
     const admin = await createTestUser(sql);
     await addUserToClinic(sql, clinic.id, admin.id, 'admin');
 
@@ -103,7 +116,7 @@ describe('patients: CPF encryption', () => {
   });
 
   it('get_patient_cpf decrypts for admin', async () => {
-    const clinic = await createTestClinic(sql, 'Pat Dec');
+    const clinic = await makeClinic('Pat Dec');
     const admin = await createTestUser(sql);
     await addUserToClinic(sql, clinic.id, admin.id, 'admin');
 
@@ -125,7 +138,7 @@ describe('patients: CPF encryption', () => {
   });
 
   it('get_patient_cpf is denied for plain member', async () => {
-    const clinic = await createTestClinic(sql, 'Pat DecDeny');
+    const clinic = await makeClinic('Pat DecDeny');
     const member = await createTestUser(sql);
     await addUserToClinic(sql, clinic.id, member.id, 'member');
 
@@ -148,7 +161,7 @@ describe('patients: CPF encryption', () => {
 
 describe('patients: phone uniqueness per clinic', () => {
   it('duplicate phone in same clinic is rejected', async () => {
-    const clinic = await createTestClinic(sql, 'Pat Phone');
+    const clinic = await makeClinic('Pat Phone');
     await createTestPatient(sql, clinic.id, { phone: '+5511900000006' });
     await expect(
       createTestPatient(sql, clinic.id, { phone: '+5511900000006' }),
@@ -156,8 +169,8 @@ describe('patients: phone uniqueness per clinic', () => {
   });
 
   it('same phone in different clinics is allowed', async () => {
-    const cA = await createTestClinic(sql, 'Pat PhoneA');
-    const cB = await createTestClinic(sql, 'Pat PhoneB');
+    const cA = await makeClinic('Pat PhoneA');
+    const cB = await makeClinic('Pat PhoneB');
     await expect(
       Promise.all([
         createTestPatient(sql, cA.id, { phone: '+5511900000007' }),
@@ -169,7 +182,7 @@ describe('patients: phone uniqueness per clinic', () => {
 
 describe('patients: audit log', () => {
   it('INSERT creates patient.created audit entry without sensitive fields', async () => {
-    const clinic = await createTestClinic(sql, 'Pat Audit');
+    const clinic = await makeClinic('Pat Audit');
     const admin = await createTestUser(sql);
     await addUserToClinic(sql, clinic.id, admin.id, 'admin');
     const p = await createTestPatient(sql, clinic.id);

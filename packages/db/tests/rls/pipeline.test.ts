@@ -1,7 +1,6 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, describe, expect, it } from 'vitest';
 import {
   addUserToClinic,
-  cleanupAll,
   createTestClinic,
   createTestConversation,
   createTestDeal,
@@ -10,18 +9,28 @@ import {
   createTestPipeline,
   createTestPipelineStage,
   createTestUser,
+  deleteTestClinic,
   getRlsClient,
   getServiceClient,
 } from './helpers/setup.js';
 
 const sql = getServiceClient();
-beforeAll(async () => { await cleanupAll(sql); });
-afterAll(async () => { await cleanupAll(sql); await sql.end(); });
+const createdClinics: string[] = [];
+async function makeClinic(name: string) {
+  const c = await createTestClinic(sql, name);
+  createdClinics.push(c.id);
+  return c;
+}
+
+afterAll(async () => {
+  await Promise.all(createdClinics.map((id) => deleteTestClinic(sql, id)));
+  await sql.end();
+});
 
 describe('pipelines: cross-tenant isolation', () => {
   it('users only see pipelines/stages/deals of their clinics', async () => {
-    const cA = await createTestClinic(sql, 'Pipe A');
-    const cB = await createTestClinic(sql, 'Pipe B');
+    const cA = await makeClinic('Pipe A');
+    const cB = await makeClinic('Pipe B');
     const uA = await createTestUser(sql);
     await addUserToClinic(sql, cA.id, uA.id);
 
@@ -48,7 +57,7 @@ describe('pipelines: cross-tenant isolation', () => {
 
 describe('deals: create and update permissions', () => {
   it('member can create deal', async () => {
-    const clinic = await createTestClinic(sql, 'Deal Create');
+    const clinic = await makeClinic('Deal Create');
     const member = await createTestUser(sql);
     await addUserToClinic(sql, clinic.id, member.id, 'member');
     const pipeline = await createTestPipeline(sql, clinic.id);
@@ -65,7 +74,7 @@ describe('deals: create and update permissions', () => {
   });
 
   it('assigned member can update their own deal', async () => {
-    const clinic = await createTestClinic(sql, 'Deal Update Assigned');
+    const clinic = await makeClinic('Deal Update Assigned');
     const member = await createTestUser(sql);
     await addUserToClinic(sql, clinic.id, member.id, 'member');
     const pipeline = await createTestPipeline(sql, clinic.id);
@@ -86,7 +95,7 @@ describe('deals: create and update permissions', () => {
   });
 
   it('non-assigned member cannot update another member deal', async () => {
-    const clinic = await createTestClinic(sql, 'Deal Update Non-assigned');
+    const clinic = await makeClinic('Deal Update Non-assigned');
     const owner = await createTestUser(sql);
     const outsider = await createTestUser(sql);
     await addUserToClinic(sql, clinic.id, owner.id, 'member');
@@ -111,7 +120,7 @@ describe('deals: create and update permissions', () => {
   });
 
   it('admin can update any deal in clinic', async () => {
-    const clinic = await createTestClinic(sql, 'Deal Admin Update');
+    const clinic = await makeClinic('Deal Admin Update');
     const admin = await createTestUser(sql);
     const member = await createTestUser(sql);
     await addUserToClinic(sql, clinic.id, admin.id, 'admin');
@@ -131,8 +140,8 @@ describe('deals: create and update permissions', () => {
 
 describe('pipeline_stages: cross-tenant FK guard', () => {
   it('stage.clinic_id must match pipeline.clinic_id', async () => {
-    const cA = await createTestClinic(sql, 'Stage FK A');
-    const cB = await createTestClinic(sql, 'Stage FK B');
+    const cA = await makeClinic('Stage FK A');
+    const cB = await makeClinic('Stage FK B');
     const pA = await createTestPipeline(sql, cA.id);
 
     await expect(
@@ -146,8 +155,8 @@ describe('pipeline_stages: cross-tenant FK guard', () => {
 
 describe('deals: cross-tenant FK guards', () => {
   it('deal.patient_id must match same clinic', async () => {
-    const cA = await createTestClinic(sql, 'Deal Pat FK A');
-    const cB = await createTestClinic(sql, 'Deal Pat FK B');
+    const cA = await makeClinic('Deal Pat FK A');
+    const cB = await makeClinic('Deal Pat FK B');
     const pA = await createTestPipeline(sql, cA.id);
     const sA = await createTestPipelineStage(sql, cA.id, pA.id);
     const patientB = await createTestPatient(sql, cB.id);
@@ -161,8 +170,8 @@ describe('deals: cross-tenant FK guards', () => {
   });
 
   it('deal.conversation_id must match same clinic', async () => {
-    const cA = await createTestClinic(sql, 'Deal Conv FK A');
-    const cB = await createTestClinic(sql, 'Deal Conv FK B');
+    const cA = await makeClinic('Deal Conv FK A');
+    const cB = await makeClinic('Deal Conv FK B');
     const pA = await createTestPipeline(sql, cA.id);
     const sA = await createTestPipelineStage(sql, cA.id, pA.id);
     const intB = await createTestIntegration(sql, cB.id);
@@ -177,8 +186,8 @@ describe('deals: cross-tenant FK guards', () => {
   });
 
   it('deal.stage_id must belong to the same clinic as deal.clinic_id', async () => {
-    const cA = await createTestClinic(sql, 'Deal Stage FK A');
-    const cB = await createTestClinic(sql, 'Deal Stage FK B');
+    const cA = await makeClinic('Deal Stage FK A');
+    const cB = await makeClinic('Deal Stage FK B');
     const pA = await createTestPipeline(sql, cA.id);
     const pB = await createTestPipeline(sql, cB.id);
     const sB = await createTestPipelineStage(sql, cB.id, pB.id);
@@ -194,7 +203,7 @@ describe('deals: cross-tenant FK guards', () => {
 
 describe('deals: moving between stages', () => {
   it('moving deal updates stage_id and position correctly', async () => {
-    const clinic = await createTestClinic(sql, 'Move Deal');
+    const clinic = await makeClinic('Move Deal');
     const pipeline = await createTestPipeline(sql, clinic.id);
     const stage1 = await createTestPipelineStage(sql, clinic.id, pipeline.id, { position: 0 });
     const stage2 = await createTestPipelineStage(sql, clinic.id, pipeline.id, { position: 1 });
@@ -213,7 +222,7 @@ describe('deals: moving between stages', () => {
   });
 
   it('moving deal to won stage sets won_at', async () => {
-    const clinic = await createTestClinic(sql, 'Won Stage');
+    const clinic = await makeClinic('Won Stage');
     const pipeline = await createTestPipeline(sql, clinic.id);
     const openStage = await createTestPipelineStage(sql, clinic.id, pipeline.id, { stageType: 'open' });
     const wonStage = await createTestPipelineStage(sql, clinic.id, pipeline.id, { stageType: 'won', position: 1 });
@@ -229,7 +238,7 @@ describe('deals: moving between stages', () => {
   });
 
   it('moving deal to lost stage sets lost_at', async () => {
-    const clinic = await createTestClinic(sql, 'Lost Stage');
+    const clinic = await makeClinic('Lost Stage');
     const pipeline = await createTestPipeline(sql, clinic.id);
     const openStage = await createTestPipelineStage(sql, clinic.id, pipeline.id, { stageType: 'open' });
     const lostStage = await createTestPipelineStage(sql, clinic.id, pipeline.id, { stageType: 'lost', position: 1 });
@@ -247,7 +256,7 @@ describe('deals: moving between stages', () => {
 
 describe('deals: audit log on stage move', () => {
   it('audit log entry is created when deal stage changes', async () => {
-    const clinic = await createTestClinic(sql, 'Audit Move');
+    const clinic = await makeClinic('Audit Move');
     const pipeline = await createTestPipeline(sql, clinic.id);
     const stage1 = await createTestPipelineStage(sql, clinic.id, pipeline.id, { position: 0 });
     const stage2 = await createTestPipelineStage(sql, clinic.id, pipeline.id, { position: 1 });
@@ -276,7 +285,7 @@ describe('deals: audit log on stage move', () => {
 
 describe('pipelines: cascade delete', () => {
   it('deleting pipeline cascades to stages and deals', async () => {
-    const clinic = await createTestClinic(sql, 'Cascade Delete');
+    const clinic = await makeClinic('Cascade Delete');
     const pipeline = await createTestPipeline(sql, clinic.id);
     const stage = await createTestPipelineStage(sql, clinic.id, pipeline.id);
     const deal = await createTestDeal(sql, clinic.id, pipeline.id, stage.id);
@@ -293,7 +302,7 @@ describe('pipelines: cascade delete', () => {
 
 describe('pipelines: only one default per clinic', () => {
   it('cannot have two default pipelines in same clinic', async () => {
-    const clinic = await createTestClinic(sql, 'Default Unique');
+    const clinic = await makeClinic('Default Unique');
     await createTestPipeline(sql, clinic.id, { isDefault: true });
 
     await expect(
@@ -302,8 +311,8 @@ describe('pipelines: only one default per clinic', () => {
   });
 
   it('two clinics can each have their own default pipeline', async () => {
-    const cA = await createTestClinic(sql, 'Default A');
-    const cB = await createTestClinic(sql, 'Default B');
+    const cA = await makeClinic('Default A');
+    const cB = await makeClinic('Default B');
 
     await expect(createTestPipeline(sql, cA.id, { isDefault: true })).resolves.toBeDefined();
     await expect(createTestPipeline(sql, cB.id, { isDefault: true })).resolves.toBeDefined();
