@@ -79,6 +79,7 @@ interface FakeRows {
     temperature: string | number
     max_tokens: number
     name: string
+    tools: string[]
   } | null
   history?: Array<{
     content: string | null
@@ -182,6 +183,7 @@ describe('dispatchAgent', () => {
     temperature: 0.7,
     max_tokens: 1024,
     name: 'agente-principal',
+    tools: [],
   }
 
   it('throws AgentDispatchSkipped when conversation.state is waiting_human', async () => {
@@ -325,5 +327,100 @@ describe('dispatchAgent', () => {
     await expect(
       dispatchAgent({ conversationId: 'conv-1', clinicId: 'clinic-A', messageId: 'm', supabase: sb }),
     ).rejects.toThrow('rate limit')
+  })
+
+  // ─── AI-2 additions ─────────────────────────────────────────────────────────
+
+  it('passes temperature, maxOutputTokens, maxSteps to agent.generate (fix #7)', async () => {
+    const { sb } = makeSupabase({
+      conversation: baseConv,
+      agentConfig: { ...baseCfg, temperature: 0.2, max_tokens: 100 },
+    })
+    const { dispatchAgent } = await import('../src/dispatcher.js')
+    await dispatchAgent({ conversationId: 'conv-1', clinicId: 'clinic-A', messageId: 'm', supabase: sb })
+
+    const opts = mockGenerate.mock.calls[0]?.[1]
+    expect(opts).toMatchObject({
+      maxSteps: 5,
+      modelSettings: { temperature: 0.2, maxOutputTokens: 100 },
+    })
+  })
+
+  it('passes tools built from agent_config.tools to createAgent', async () => {
+    const { sb } = makeSupabase({
+      conversation: baseConv,
+      agentConfig: { ...baseCfg, tools: ['escalate_to_human', 'check_business_hours'] },
+    })
+    const { dispatchAgent } = await import('../src/dispatcher.js')
+    await dispatchAgent({ conversationId: 'conv-1', clinicId: 'clinic-A', messageId: 'm', supabase: sb })
+
+    const callArg = mockCreateAgent.mock.calls[0]?.[0] as { tools: Record<string, unknown> }
+    expect(callArg.tools).toBeDefined()
+    expect(Object.keys(callArg.tools).sort()).toEqual(['check_business_hours', 'escalate_to_human'])
+  })
+
+  it('skips outbound message insert when escalate_to_human was called and text is empty', async () => {
+    mockGenerate.mockResolvedValueOnce({
+      text: '',
+      totalUsage: { inputTokens: 50, outputTokens: 5 },
+      steps: [{ toolCalls: [{ payload: { toolName: 'escalate_to_human' } }] }],
+      toolCalls: [{ payload: { toolName: 'escalate_to_human' } }],
+    } as never)
+    const { sb, spies } = makeSupabase({
+      conversation: baseConv,
+      agentConfig: { ...baseCfg, tools: ['escalate_to_human'] },
+    })
+    const { dispatchAgent } = await import('../src/dispatcher.js')
+    const result = await dispatchAgent({
+      conversationId: 'conv-1',
+      clinicId: 'clinic-A',
+      messageId: 'm',
+      supabase: sb,
+    })
+
+    // The insert chain (insert → select → single) is only walked when text is non-empty.
+    expect(spies.insertedMessage).not.toHaveBeenCalled()
+    expect(result.messageId).toBe('')
+  })
+
+  it('still inserts outbound goodbye text when escalate was called AND text is non-empty', async () => {
+    mockGenerate.mockResolvedValueOnce({
+      text: 'Tudo bem, vou te transferir agora. Até logo!',
+      totalUsage: { inputTokens: 60, outputTokens: 12 },
+      steps: [{ toolCalls: [{ payload: { toolName: 'escalate_to_human' } }] }],
+      toolCalls: [{ payload: { toolName: 'escalate_to_human' } }],
+    } as never)
+    const { sb, spies } = makeSupabase({
+      conversation: baseConv,
+      agentConfig: { ...baseCfg, tools: ['escalate_to_human'] },
+    })
+    const { dispatchAgent } = await import('../src/dispatcher.js')
+    await dispatchAgent({ conversationId: 'conv-1', clinicId: 'clinic-A', messageId: 'm', supabase: sb })
+
+    expect(spies.insertedMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ content: 'Tudo bem, vou te transferir agora. Até logo!' }),
+    )
+  })
+
+  it('accepts agentName arg, defaults to agente-principal', async () => {
+    const { sb, spies } = makeSupabase({
+      conversation: baseConv,
+      agentConfig: { ...baseCfg, name: 'agente-triagem' },
+    })
+    const { dispatchAgent } = await import('../src/dispatcher.js')
+    await dispatchAgent({
+      conversationId: 'conv-1',
+      clinicId: 'clinic-A',
+      messageId: 'm',
+      supabase: sb,
+      agentName: 'agente-triagem',
+    })
+
+    // Verify the agent_configs query filtered by name='agente-triagem'.
+    const eqStatusReturn = spies.agentEqClinic.mock.results[0]?.value
+    const eqStatusCall = eqStatusReturn?.eq
+    expect(eqStatusCall).toHaveBeenCalledWith('status', 'published')
+
+    expect(mockCreateAgent).toHaveBeenCalledWith(expect.objectContaining({ agentName: 'agente-triagem' }))
   })
 })

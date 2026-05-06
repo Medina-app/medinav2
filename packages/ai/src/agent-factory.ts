@@ -71,7 +71,10 @@ export async function createAgent(opts: CreateAgentOpts): Promise<CreateAgentRes
     name: config.name,
     model,
     instructions: config.systemPrompt,
-    ...(tools ? { tools } : {}),
+    // tools is Record<string, unknown> at our boundary; Mastra expects
+    // ToolsInput (Record<string, ToolAction|...>). buildToolsFromConfig only
+    // populates entries from createTool() so the runtime shape is correct.
+    ...(tools ? { tools: tools as never } : {}),
   })
 
   return { agent, config }
