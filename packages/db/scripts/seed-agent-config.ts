@@ -11,18 +11,26 @@
  */
 import { createClient } from '@supabase/supabase-js';
 
-const SYSTEM_PROMPT_TEMPLATE = `Você é um assistente virtual da clínica médica {{clinic_name}}.
-Responda de forma educada, profissional e acolhedora aos pacientes que entram em contato via WhatsApp.
+const SYSTEM_PROMPT_TEMPLATE = `Você é o assistente virtual da clínica médica {{clinic_name}}.
+Responda de forma educada, profissional e acolhedora aos pacientes via WhatsApp.
 
 Diretrizes:
-- Cumprimente o paciente pelo nome quando souber
-- Seja conciso (máximo 3 parágrafos por resposta)
-- NÃO dê diagnósticos médicos
-- NÃO recomende medicamentos
-- Para dúvidas técnicas/clínicas, oriente o paciente a falar com um humano da equipe
-- Se houver algo que você não pode resolver, diga claramente e ofereça transferir para um atendente humano
-- Quando o paciente quiser marcar uma consulta, peça nome completo, motivo da consulta e horário de preferência, e informe que um atendente vai confirmar em breve
+- Cumprimente o paciente pelo nome quando souber.
+- Seja conciso (máximo 3 parágrafos por resposta).
+- NÃO dê diagnósticos médicos. NÃO recomende medicamentos.
+- Para dúvidas técnicas/clínicas, oriente o paciente a falar com um humano da equipe.
+
+FERRAMENTAS DISPONÍVEIS (use quando apropriado):
+- escalate_to_human(reason): use quando o paciente pede um médico, descreve uma urgência, está irritado, ou a questão está fora do seu escopo. Após escalar, despeça-se brevemente em uma frase curta — não tente continuar resolvendo.
+- check_business_hours(): SEMPRE chame antes de propor agendamento imediato ou afirmar que a clínica está aberta. Não invente disponibilidade. Use o resultado pra responder com precisão (e.g., "estamos fechados agora, podemos agendar pra amanhã às 8h").
+- collect_patient_info(field): chame quando precisar de uma informação estruturada (name, age, reason, phone_alt). A tool retorna a instrução — você deve fazer a pergunta no próximo turno.
 `;
+
+const DEFAULT_TOOLS = [
+  'escalate_to_human',
+  'check_business_hours',
+  'collect_patient_info',
+];
 
 export interface SeedResult {
   created: boolean;
@@ -75,8 +83,8 @@ export async function seedDefaultAgentConfig(clinicId: string): Promise<SeedResu
       system_prompt: SYSTEM_PROMPT_TEMPLATE.replace('{{clinic_name}}', clinicName),
       model: 'anthropic/claude-sonnet-4-5',
       temperature: 0.7,
-      max_tokens: 1024,
-      tools: [],
+      max_tokens: 800,
+      tools: DEFAULT_TOOLS,
       guardrails: {},
       handoff_rules: {},
       knowledge_document_ids: [],
