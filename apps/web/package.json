@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@base-ui/react": "^1.4.1",
+    "@medina/ai": "workspace:*",
     "@medina/auth": "workspace:*",
     "@medina/chat": "workspace:*",
     "@medina/integrations-calcom": "workspace:*",

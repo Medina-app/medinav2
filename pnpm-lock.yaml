@@ -23,6 +23,9 @@ importers:
       '@base-ui/react':
         specifier: ^1.4.1
         version: 1.4.1(@types/react@19.2.14)(date-fns@4.1.0)(react-dom@19.2.5(react@19.2.5))(react@19.2.5)
+      '@medina/ai':
+        specifier: workspace:*
+        version: link:../../packages/ai
       '@medina/auth':
         specifier: workspace:*
         version: link:../../packages/auth
