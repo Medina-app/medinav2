@@ -14,8 +14,11 @@
     "@medina/db": "workspace:*",
     "@openrouter/ai-sdk-provider": "^2.9.0",
     "@supabase/supabase-js": "^2",
+    "date-fns": "^3.6.0",
+    "date-fns-tz": "^3.2.0",
     "langfuse": "^3.38.20",
-    "openai": "^6.36.0"
+    "openai": "^6.36.0",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/node": "^22",
