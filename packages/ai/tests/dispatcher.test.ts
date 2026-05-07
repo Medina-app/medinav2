@@ -80,6 +80,7 @@ interface FakeRows {
     max_tokens: number
     name: string
     tools: string[]
+    knowledge_document_ids?: string[]
   } | null
   history?: Array<{
     content: string | null
@@ -416,6 +417,59 @@ describe('dispatchAgent', () => {
     expect(spies.insertedMessage).toHaveBeenCalledWith(
       expect.objectContaining({ content: 'Tudo bem, vou te transferir agora. Até logo!' }),
     )
+  })
+
+  it('SELECT includes knowledge_document_ids column (AI-3 wiring)', async () => {
+    const { sb, spies } = makeSupabase({
+      conversation: baseConv,
+      agentConfig: { ...baseCfg, knowledge_document_ids: ['d1'] },
+    })
+    const { dispatchAgent } = await import('../src/dispatcher.js')
+    await dispatchAgent({ conversationId: 'conv-1', clinicId: 'clinic-A', messageId: 'm', supabase: sb })
+
+    const selectArg = spies.agentSelect.mock.calls[0]?.[0] as string
+    expect(selectArg).toContain('knowledge_document_ids')
+  })
+
+  it('passes knowledge_document_ids from agent_config into ToolContext (search_kb sees them)', async () => {
+    // Verify the wiring by intercepting buildToolsFromConfig: assert ctx arg
+    // contains the knowledgeDocumentIds value pulled from agent_configs.
+    vi.resetModules()
+    const buildSpy = vi.fn().mockReturnValue({})
+    vi.doMock('../src/tools/build.js', () => ({ buildToolsFromConfig: buildSpy }))
+
+    const { sb } = makeSupabase({
+      conversation: baseConv,
+      agentConfig: { ...baseCfg, knowledge_document_ids: ['doc-aaa', 'doc-bbb'] },
+    })
+    const { dispatchAgent } = await import('../src/dispatcher.js')
+    await dispatchAgent({ conversationId: 'conv-1', clinicId: 'clinic-A', messageId: 'm', supabase: sb })
+
+    expect(buildSpy).toHaveBeenCalledTimes(1)
+    const ctxArg = buildSpy.mock.calls[0]?.[0] as { knowledgeDocumentIds?: readonly string[] }
+    expect(ctxArg.knowledgeDocumentIds).toEqual(['doc-aaa', 'doc-bbb'])
+
+    vi.doUnmock('../src/tools/build.js')
+    vi.resetModules()
+  })
+
+  it('defaults knowledgeDocumentIds to empty array when agent_config row omits the field', async () => {
+    vi.resetModules()
+    const buildSpy = vi.fn().mockReturnValue({})
+    vi.doMock('../src/tools/build.js', () => ({ buildToolsFromConfig: buildSpy }))
+
+    const { sb } = makeSupabase({
+      conversation: baseConv,
+      agentConfig: { ...baseCfg }, // no knowledge_document_ids field
+    })
+    const { dispatchAgent } = await import('../src/dispatcher.js')
+    await dispatchAgent({ conversationId: 'conv-1', clinicId: 'clinic-A', messageId: 'm', supabase: sb })
+
+    const ctxArg = buildSpy.mock.calls[0]?.[0] as { knowledgeDocumentIds?: readonly string[] }
+    expect(ctxArg.knowledgeDocumentIds).toEqual([])
+
+    vi.doUnmock('../src/tools/build.js')
+    vi.resetModules()
   })
 
   it('accepts agentName arg, defaults to agente-principal', async () => {

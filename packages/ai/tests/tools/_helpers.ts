@@ -1,12 +1,19 @@
 import { vi } from 'vitest'
 import type { ToolContext } from '../../src/types.js'
 
-type RowSelector = { single?: unknown; maybeSingle?: unknown; insertResult?: unknown }
+type RowSelector = {
+  single?: unknown
+  maybeSingle?: unknown
+  insertResult?: unknown
+  /** Resolves `from(table).select().eq()*.in()` to `{ data, error: null }`. */
+  inResult?: unknown
+}
 
 /**
  * Mock Supabase client supporting the chains tools actually use:
  *   from('X').select(...).eq(...).single() / maybeSingle()
  *   from('X').select(...).eq(...).eq(...).single() / maybeSingle()
+ *   from('X').select(...).eq(...).in('col', [...])  (await → { data, error })
  *   from('X').update(...).eq(...).eq(...)            (returns { error })
  *   from('X').insert(...).select(...).single()       (when caller wants the row)
  *   from('X').insert(...)                            (fire-and-forget; returns { error: null })
@@ -28,13 +35,20 @@ export function buildMockSupabase(
   const from = vi.fn((table: string) => {
     const cfg = tables[table] ?? {}
 
-    // SELECT chain — supports arbitrary .eq() chaining ending with .single() | .maybeSingle()
-    const selectChain: {
-      eq: () => typeof selectChain
+    // SELECT chain — supports arbitrary .eq() chaining ending with .single() |
+    // .maybeSingle() | .in(col, values). The .in() form resolves directly
+    // (search_kb uses it to batch-fetch knowledge_documents titles).
+    type SelectChain = {
+      eq: () => SelectChain
+      in: (col: string, values: unknown[]) => Promise<{ data: unknown; error: null }>
       single: ReturnType<typeof vi.fn>
       maybeSingle: ReturnType<typeof vi.fn>
-    } = {
+    }
+    const selectChain: SelectChain = {
       eq: vi.fn(() => selectChain),
+      in: vi.fn((_col: string, _values: unknown[]) =>
+        Promise.resolve({ data: cfg.inResult ?? [], error: null as null }),
+      ) as SelectChain['in'],
       single: vi.fn().mockResolvedValue({ data: cfg.single ?? null, error: null }),
       maybeSingle: vi.fn().mockResolvedValue({ data: cfg.maybeSingle ?? null, error: null }),
     }

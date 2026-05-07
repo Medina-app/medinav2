@@ -28,17 +28,27 @@ describe('buildToolsFromConfig', () => {
     expect(buildToolsFromConfig(buildToolContext(), [])).toEqual({})
   })
 
-  it('all 3 tools registerable together', () => {
+  it('all 4 tools registerable together (search_kb included)', () => {
     const tools = buildToolsFromConfig(buildToolContext(), [
       'escalate_to_human',
       'collect_patient_info',
       'check_business_hours',
+      'search_kb',
     ])
     expect(Object.keys(tools).sort()).toEqual([
       'check_business_hours',
       'collect_patient_info',
       'escalate_to_human',
+      'search_kb',
     ])
+  })
+
+  it('search_kb is exposed via the registry with correct tool id', () => {
+    const tools = buildToolsFromConfig(buildToolContext(), ['search_kb'])
+    const t = tools['search_kb'] as { id: string; execute: unknown } | undefined
+    expect(t).toBeDefined()
+    expect(t!.id).toBe('search_kb')
+    expect(typeof t!.execute).toBe('function')
   })
 
   it('each registered value is a Mastra tool with id + execute', () => {
