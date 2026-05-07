@@ -43,6 +43,7 @@ export function mapConversation(row: Raw): Conversation {
     channel: row['channel'] as Conversation['channel'],
     externalId: row['external_id'] as string,
     state: row['state'] as Conversation['state'],
+    escalatedVia: row['escalated_via'] as 'ai' | 'manual' | null,
     assignedUserId: row['assigned_user_id'] as string | null,
     aiEnabled: (row['ai_enabled'] as boolean) ?? true,
     lastMessageAt: row['last_message_at'] ? new Date(row['last_message_at'] as string) : null,

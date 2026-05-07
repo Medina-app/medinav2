@@ -91,11 +91,11 @@ describe('escalate_conversation (atomic, PR-A #11+#13)', () => {
     expect(first?.ok).toBe(true);
     expect(second?.ok).toBe(false);
 
-    const [{ count }] = await sql<{ count: string }[]>`
+    const countRows = await sql<{ count: string }[]>`
       SELECT COUNT(*)::text AS count FROM messages
       WHERE conversation_id = ${conv.id} AND sender_type = 'system'
     `;
-    expect(Number(count)).toBe(1);
+    expect(Number(countRows[0]?.count ?? '0')).toBe(1);
   });
 });
 

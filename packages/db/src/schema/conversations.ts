@@ -39,6 +39,7 @@ export const conversations = pgTable(
     channel: text('channel').$type<ConversationChannel>().notNull(),
     externalId: text('external_id').notNull(),
     state: text('state').$type<ConversationState>().notNull().default('ai_handling'),
+    escalatedVia: text('escalated_via').$type<'ai' | 'manual' | null>(),
     assignedUserId: uuid('assigned_user_id'),
     aiEnabled: boolean('ai_enabled').notNull().default(true),
     lastMessageAt: timestamp('last_message_at', { withTimezone: true }),
@@ -84,6 +85,10 @@ export const conversations = pgTable(
     check(
       'conversations_state_check',
       sql`${t.state} IN ('ai_handling','awaiting_template_response','waiting_human','assigned','paused','resolved')`,
+    ),
+    check(
+      'conversations_escalated_via_valid',
+      sql`${t.escalatedVia} IS NULL OR ${t.escalatedVia} IN ('ai','manual')`,
     ),
   ],
 );
