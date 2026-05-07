@@ -90,7 +90,7 @@ describe('toggleAiHandlingAction', () => {
     expect(result).toEqual({ error: 'Conversa não encontrada.' });
   });
 
-  it('transitions ai_handling → waiting_human via transition_conversation_state RPC', async () => {
+  it('transitions ai_handling → waiting_human via 4-arg RPC with escalated_via_value=manual', async () => {
     const sb = buildSupabase({ conversation: { clinic_id: 'clinic-1' } });
     mockGetSupabaseServerClient.mockReturnValue(sb.client);
 
@@ -100,17 +100,18 @@ describe('toggleAiHandlingAction', () => {
     });
 
     expect(result).toEqual({ ok: true });
-    expect(sb.rpcMock).toHaveBeenCalledWith(
-      'transition_conversation_state',
-      expect.objectContaining({
-        conv_id: '11111111-1111-1111-1111-111111111111',
-        new_state: 'waiting_human',
-        reason: 'human_paused_ai',
-      }),
-    );
+    // PR-A #13: passing all 4 args ensures Postgres resolves to the 4-arg
+    // overload (arity-exact), which atomically sets escalated_via='manual'
+    // alongside the state transition. Atendente desligando IA = escalation manual.
+    expect(sb.rpcMock).toHaveBeenCalledWith('transition_conversation_state', {
+      conv_id: '11111111-1111-1111-1111-111111111111',
+      new_state: 'waiting_human',
+      reason: 'human_paused_ai',
+      escalated_via_value: 'manual',
+    });
   });
 
-  it('transitions waiting_human → ai_handling with reason human_returned_to_ai', async () => {
+  it('transitions waiting_human → ai_handling with escalated_via_value=null (4-arg overload clears flag)', async () => {
     const sb = buildSupabase({ conversation: { clinic_id: 'clinic-1' } });
     mockGetSupabaseServerClient.mockReturnValue(sb.client);
 
@@ -120,13 +121,15 @@ describe('toggleAiHandlingAction', () => {
     });
 
     expect(result).toEqual({ ok: true });
-    expect(sb.rpcMock).toHaveBeenCalledWith(
-      'transition_conversation_state',
-      expect.objectContaining({
-        new_state: 'ai_handling',
-        reason: 'human_returned_to_ai',
-      }),
-    );
+    // 4-arg + new_state='ai_handling' clears escalated_via=NULL inside the
+    // function regardless of the passed value, but we still call with explicit
+    // null for arity consistency (always 4 args from this server action).
+    expect(sb.rpcMock).toHaveBeenCalledWith('transition_conversation_state', {
+      conv_id: '11111111-1111-1111-1111-111111111111',
+      new_state: 'ai_handling',
+      reason: 'human_returned_to_ai',
+      escalated_via_value: null,
+    });
   });
 
   it('surfaces RPC error (invalid transition: e.g. resolved → ai_handling)', async () => {

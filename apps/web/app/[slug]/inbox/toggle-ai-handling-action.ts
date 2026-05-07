@@ -41,13 +41,18 @@ export async function toggleAiHandlingAction(input: {
 
   const reason = parsed.data.newState === 'ai_handling' ? 'human_returned_to_ai' : 'human_paused_ai';
 
-  // Param names match the deployed function signature: conv_id, new_state,
-  // reason (NOT p_*). Verified via pg_get_function_arguments in prod.
-  // The previous p_* names silently failed since CHAT-3 — fix #11 in AI-2.
+  // PR-A #13: pass 4 args explicitly to hit the 4-arg overload (Postgres
+  // resolves overloads by exact arity). Pausing IA → escalated_via='manual'
+  // atomically. Returning to IA → null (the function force-clears the flag
+  // on 'ai_handling' regardless, but we send null for arity consistency).
+  const escalatedViaValue: 'manual' | null =
+    parsed.data.newState === 'waiting_human' ? 'manual' : null;
+
   const { error } = await sb.rpc('transition_conversation_state', {
     conv_id: parsed.data.conversationId,
     new_state: parsed.data.newState,
     reason,
+    escalated_via_value: escalatedViaValue,
   });
   if (error) return { error: error.message };
 
