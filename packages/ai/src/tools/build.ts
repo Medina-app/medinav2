@@ -2,6 +2,7 @@ import type { ToolContext } from '../types.js'
 import { buildEscalateTool } from './escalate.js'
 import { buildCollectInfoTool } from './collect-info.js'
 import { buildBusinessHoursTool } from './business-hours.js'
+import { buildSearchKbTool } from './search-kb.js'
 
 type ToolBuilder = (ctx: ToolContext) => unknown
 
@@ -9,6 +10,7 @@ const REGISTRY: Record<string, ToolBuilder> = {
   escalate_to_human: buildEscalateTool,
   collect_patient_info: buildCollectInfoTool,
   check_business_hours: buildBusinessHoursTool,
+  search_kb: buildSearchKbTool,
 }
 
 /**
