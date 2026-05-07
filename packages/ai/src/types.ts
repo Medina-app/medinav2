@@ -33,6 +33,10 @@ export interface ToolContext {
   clinicId: string
   conversationId: string
   patientId?: string
+  /** Optional uuid[] from agent_config.knowledge_document_ids. Empty/undefined
+   *  means "search all KB documents for this clinic" — search_kb tool converts
+   *  empty to undefined so retrieveKnowledge passes null to the RPC. */
+  knowledgeDocumentIds?: readonly string[]
   supabase: SupabaseClient
 }
 
