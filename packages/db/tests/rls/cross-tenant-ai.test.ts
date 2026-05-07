@@ -5,14 +5,20 @@ import {
   createTestIntegration,
   createTestConversation,
   createTestKnowledgeDocument,
+  createTestUser,
+  addUserToClinic,
+  getRlsClient,
   deleteTestClinic,
+  deleteTestUser,
 } from './helpers/setup.js';
 
 const sql = getServiceClient();
 const createdClinicIds: string[] = [];
+const createdUserIds: string[] = [];
 
 afterAll(async () => {
   await Promise.all(createdClinicIds.map((id) => deleteTestClinic(sql, id)));
+  await Promise.all(createdUserIds.map((id) => deleteTestUser(sql, id)));
   await sql.end();
 });
 
@@ -243,29 +249,76 @@ describe('cross-tenant defense in depth (PR-A #15)', () => {
     expect(states.find((r) => r.id === convB.id)?.escalated_via).toBeNull();
   });
 
-  it('transition_conversation_state: NÃO valida tenant interno (caller layer responsibility — toggle action faz guard antes)', async () => {
-    // Esse teste documenta decisão arquitetural: a RPC permite ANY caller com
-    // EXECUTE permission mudar state de QUALQUER conversation. Cross-tenant
-    // guard é feito ANTES da RPC pelos callers (toggleAiHandlingAction:33-40
-    // checa conv.clinic_id === ctx.clinicId; escalate_conversation function
-    // checa internamente). Se essa proteção movesse pra dentro da RPC,
-    // quebraria webhooks/workers que legitimamente precisam transitar state
-    // de conversations cross-clinic-context (caller já validou pelo URL).
-    //
-    // Esse comportamento É testado pra garantir que mudanças futuras na RPC
-    // não introduzam guard indevido (que quebraria toggleAiHandlingAction +
-    // chat.test.ts state machine tests).
-    const clinic = await makeClinic('Xtenant-TC-Doc');
+  // Migration 0019 fix #2 (CodeRabbit critical): is_clinic_member guard inside
+  // both transition_conversation_state overloads, scoped to authenticated
+  // callers only. service_role bypass preserved (auth.uid() returns NULL).
+  it('transition_conversation_state rejects authenticated non-member of conv clinic', async () => {
+    const clinicA = await makeClinic('Guard-Auth-A');
+    const clinicB = await makeClinic('Guard-Auth-B');
+    const userA = await createTestUser(sql);
+    createdUserIds.push(userA.id);
+    await addUserToClinic(sql, clinicA.id, userA.id);
+
+    const intB = await createTestIntegration(sql, clinicB.id);
+    const convB = await createTestConversation(sql, clinicB.id, intB.id);
+
+    // userA está logado e tenta transitar conv que pertence a clinic B.
+    await expect(
+      getRlsClient(sql, userA.id).query((tx) =>
+        tx`SELECT transition_conversation_state(${convB.id}::uuid, 'waiting_human', 'forge')`,
+      ),
+    ).rejects.toThrow(/cross-tenant violation|caller is not member/i);
+
+    const [row] = await sql<{ state: string; escalated_via: string | null }[]>`
+      SELECT state, escalated_via FROM conversations WHERE id = ${convB.id}
+    `;
+    expect(row?.state).toBe('ai_handling');
+    expect(row?.escalated_via).toBeNull();
+  });
+
+  it('transition_conversation_state via service_role bypasses guard (auth.uid()=NULL short-circuit)', async () => {
+    const clinic = await makeClinic('Guard-ServiceRole');
     const integration = await createTestIntegration(sql, clinic.id);
     const conv = await createTestConversation(sql, clinic.id, integration.id);
 
-    // Service-role-direct call: function aceita sem perguntar quem chama.
+    // sql is the service-role client; auth.uid() is NULL, guard short-circuits.
     await sql`
-      SELECT transition_conversation_state(${conv.id}::uuid, 'waiting_human', 'doc-test')
+      SELECT transition_conversation_state(${conv.id}::uuid, 'waiting_human', 'service-bypass', 'manual')
     `;
-    const [row] = await sql<{ state: string }[]>`
-      SELECT state FROM conversations WHERE id = ${conv.id}
+    const [row] = await sql<{ state: string; escalated_via: string }[]>`
+      SELECT state, escalated_via FROM conversations WHERE id = ${conv.id}
     `;
     expect(row?.state).toBe('waiting_human');
+    expect(row?.escalated_via).toBe('manual');
+  });
+
+  // Migration 0019 fix #3 (CodeRabbit major): waiting_human always has a
+  // non-null escalated_via via COALESCE default to 'manual'.
+  it('3-arg transition to waiting_human without flag defaults escalated_via to manual', async () => {
+    const clinic = await makeClinic('Default-Manual-3arg');
+    const integration = await createTestIntegration(sql, clinic.id);
+    const conv = await createTestConversation(sql, clinic.id, integration.id);
+
+    // 3-arg overload — no escalated_via_value. Should default to 'manual'.
+    await sql`SELECT transition_conversation_state(${conv.id}::uuid, 'waiting_human', 'no-flag')`;
+    const [row] = await sql<{ state: string; escalated_via: string }[]>`
+      SELECT state, escalated_via FROM conversations WHERE id = ${conv.id}
+    `;
+    expect(row?.state).toBe('waiting_human');
+    expect(row?.escalated_via).toBe('manual');
+  });
+
+  it('4-arg transition to waiting_human with NULL flag defaults escalated_via to manual', async () => {
+    const clinic = await makeClinic('Default-Manual-4arg');
+    const integration = await createTestIntegration(sql, clinic.id);
+    const conv = await createTestConversation(sql, clinic.id, integration.id);
+
+    // 4-arg overload com escalated_via_value=NULL — should default to 'manual'.
+    await sql`SELECT transition_conversation_state(${conv.id}::uuid, 'waiting_human', 'null-flag', NULL)`;
+    const [row] = await sql<{ state: string; escalated_via: string }[]>`
+      SELECT state, escalated_via FROM conversations WHERE id = ${conv.id}
+    `;
+    expect(row?.state).toBe('waiting_human');
+    expect(row?.escalated_via).toBe('manual');
   });
 });
