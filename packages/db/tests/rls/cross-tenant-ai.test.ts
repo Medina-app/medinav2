@@ -321,4 +321,51 @@ describe('cross-tenant defense in depth (PR-A #15)', () => {
     expect(row?.state).toBe('waiting_human');
     expect(row?.escalated_via).toBe('manual');
   });
+
+  // Migration 0020 fix (CodeRabbit re-review major): purge stale 'ai' on
+  // legitimate manual reescalations. Atendente assume conv (assigned) então
+  // devolve pra fila via 3-arg waiting_human — esperado 'manual', não 'ai'.
+  it("stale 'ai' is purged on assigned -> waiting_human via 3-arg (atendente devolve)", async () => {
+    const clinic = await makeClinic('Purge-Stale-AI');
+    const integration = await createTestIntegration(sql, clinic.id);
+    const conv = await createTestConversation(sql, clinic.id, integration.id);
+
+    // 1. IA escala via escalate_conversation: state=waiting_human, escalated_via='ai'
+    await sql`SELECT escalate_conversation(${conv.id}::uuid, ${clinic.id}::uuid, 'ia escalou')`;
+    const [afterEscalate] = await sql<{ state: string; escalated_via: string }[]>`
+      SELECT state, escalated_via FROM conversations WHERE id = ${conv.id}
+    `;
+    expect(afterEscalate?.escalated_via).toBe('ai');
+
+    // 2. Atendente assume: state=assigned (escalated_via preserved by ELSE branch).
+    await sql`SELECT transition_conversation_state(${conv.id}::uuid, 'assigned', 'atendente assumiu')`;
+    const [afterAssign] = await sql<{ state: string; escalated_via: string }[]>`
+      SELECT state, escalated_via FROM conversations WHERE id = ${conv.id}
+    `;
+    expect(afterAssign?.state).toBe('assigned');
+    expect(afterAssign?.escalated_via).toBe('ai'); // preserved through non-target transition
+
+    // 3. Atendente devolve pra fila via 3-arg waiting_human.
+    // Pre-0020: COALESCE(escalated_via, 'manual') = 'ai' (STALE).
+    // Post-0020: hard 'manual' — purga origem antiga.
+    await sql`SELECT transition_conversation_state(${conv.id}::uuid, 'waiting_human', 'devolveu pra fila')`;
+    const [afterReturn] = await sql<{ state: string; escalated_via: string }[]>`
+      SELECT state, escalated_via FROM conversations WHERE id = ${conv.id}
+    `;
+    expect(afterReturn?.state).toBe('waiting_human');
+    expect(afterReturn?.escalated_via).toBe('manual'); // KEY assertion
+
+    // 4. Audit row do step 3 deve registrar escalated_via='manual' no `after`
+    // (pre-0020, 3-arg só gravava state — agora grava ambos).
+    type AuditRow = { metadata: { after: { state: string; escalated_via: string } } };
+    const audits = await sql<AuditRow[]>`
+      SELECT metadata FROM audit_logs
+      WHERE resource_id = ${conv.id}
+        AND action = 'conversation.state_changed'
+      ORDER BY created_at DESC
+      LIMIT 1
+    `;
+    expect(audits[0]?.metadata.after.state).toBe('waiting_human');
+    expect(audits[0]?.metadata.after.escalated_via).toBe('manual');
+  });
 });
