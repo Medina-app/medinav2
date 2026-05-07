@@ -4,6 +4,7 @@ import {
   createTestClinic,
   createTestIntegration,
   createTestConversation,
+  createTestKnowledgeDocument,
   deleteTestClinic,
 } from './helpers/setup.js';
 
@@ -130,5 +131,141 @@ describe('transition_conversation_state escalated_via flag (PR-A #13)', () => {
     `;
     expect(row?.state).toBe('ai_handling');
     expect(row?.escalated_via).toBeNull();
+  });
+});
+
+// ─── Cross-tenant defense in depth (PR-A #15) ───────────────────────────────
+//
+// Testa as barreiras DB-level que protegem contra cross-tenant leak. Cada
+// barreira é necessária mas não suficiente isoladamente — defesa em profundidade
+// significa que mesmo se uma falhar, as outras seguram.
+//
+// Layers cobertos aqui:
+//   1. agent_configs SELECT pattern: dispatcher.ts:77-86 filtra por clinic_id
+//      explicitamente. Mesmo com mesmo `name='agente-principal'` em duas
+//      clinics, o filtro previne mistura.
+//   2. search_knowledge_chunks_internal: RPC SECURITY DEFINER filtra
+//      `WHERE kc.clinic_id = target_clinic_id`. Não confia em RLS (service_role
+//      bypassa) — guard explícito no SQL.
+//   3. escalate_conversation: já testado acima ("cross-tenant violation").
+//      Esse describe adiciona variante explícita com 2 clinics ambas com
+//      conversations ativas (em vez de só 1 conv existir).
+//   4. transition_conversation_state: doc test executável — a função NÃO
+//      valida tenant interno. É decisão consciente: o caller (toggleAiHandling
+//      action ou Inngest worker) faz cross-tenant guard antes da RPC. Mover
+//      essa validação pra dentro da função quebraria webhooks que precisam
+//      passar clinic_id arbitrário (worker-side authorization).
+describe('cross-tenant defense in depth (PR-A #15)', () => {
+  it('agent_configs lookup: clinic-a query NEVER returns clinic-b config (mesmo com name=agente-principal colidindo)', async () => {
+    const clinicA = await makeClinic('Xtenant-Agent-A');
+    const clinicB = await makeClinic('Xtenant-Agent-B');
+
+    // Cria agent_config published com mesmo name em AMBAS clinics — pattern
+    // realista pois 'agente-principal' é o name padrão em todas as clinics.
+    await sql`
+      INSERT INTO agent_configs (clinic_id, name, status, system_prompt, model)
+      VALUES
+        (${clinicA.id}, 'agente-principal', 'published', 'I am A', 'claude-haiku-4-5'),
+        (${clinicB.id}, 'agente-principal', 'published', 'I am B', 'claude-haiku-4-5')
+    `;
+
+    // Replicate exactly the dispatcher.ts:77-86 lookup pattern.
+    const cfgsForA = await sql<{ system_prompt: string; clinic_id: string }[]>`
+      SELECT system_prompt, clinic_id
+      FROM agent_configs
+      WHERE clinic_id = ${clinicA.id}
+        AND status = 'published'
+        AND name = 'agente-principal'
+    `;
+    expect(cfgsForA.length).toBe(1);
+    expect(cfgsForA[0]?.clinic_id).toBe(clinicA.id);
+    expect(cfgsForA[0]?.system_prompt).toBe('I am A');
+
+    // Sanity: clinic-b's row exists but is invisible to A's query.
+    const cfgsForB = await sql<{ system_prompt: string }[]>`
+      SELECT system_prompt FROM agent_configs WHERE clinic_id = ${clinicB.id}
+    `;
+    expect(cfgsForB[0]?.system_prompt).toBe('I am B');
+  });
+
+  it('search_knowledge_chunks_internal: returns ONLY chunks of target_clinic_id, never cross-tenant leak', async () => {
+    const clinicA = await makeClinic('Xtenant-KB-A');
+    const clinicB = await makeClinic('Xtenant-KB-B');
+
+    const docA = await createTestKnowledgeDocument(sql, clinicA.id, { title: 'Doc A' });
+    const docB = await createTestKnowledgeDocument(sql, clinicB.id, { title: 'Doc B' });
+
+    // Mesmo embedding fake (1536 dims) nas chunks de ambas — força a query a
+    // depender só do filtro WHERE kc.clinic_id pra discriminar.
+    const fakeEmbedding = `[${Array(1536).fill(0.1).join(',')}]`;
+    await sql`
+      INSERT INTO knowledge_chunks (clinic_id, document_id, content, embedding, chunk_index, token_count)
+      VALUES
+        (${clinicA.id}, ${docA.id}, 'segredo da clínica A', ${fakeEmbedding}::vector, 0, 5),
+        (${clinicB.id}, ${docB.id}, 'segredo da clínica B', ${fakeEmbedding}::vector, 0, 5)
+    `;
+
+    // RPC chamada com target_clinic_id=A. Mesmo embedding e top_k=10 (querer
+    // até 10 resultados) — se houvesse leak, chunk B apareceria por similarity.
+    type ChunkResult = { chunk_id: string; document_id: string; content: string };
+    const results = await sql<ChunkResult[]>`
+      SELECT chunk_id, document_id, content
+      FROM search_knowledge_chunks_internal(${clinicA.id}::uuid, ${fakeEmbedding}::vector, 10)
+    `;
+
+    expect(results.length).toBe(1);
+    expect(results[0]?.document_id).toBe(docA.id);
+    expect(results[0]?.content).toContain('clínica A');
+    expect(results.find((r) => r.content.includes('clínica B'))).toBeUndefined();
+  });
+
+  it('escalate_conversation forge: conv de clinic-b + clinic_id de clinic-a → cross-tenant violation', async () => {
+    const clinicA = await makeClinic('Xtenant-Esc-A');
+    const clinicB = await makeClinic('Xtenant-Esc-B');
+    // Setup explícito: AMBAS clinics têm conversation ativa (cenário realista,
+    // não só 1 conv existindo). Atacante posicionado em A tenta escalar conv de B.
+    const intA = await createTestIntegration(sql, clinicA.id);
+    const intB = await createTestIntegration(sql, clinicB.id);
+    const convA = await createTestConversation(sql, clinicA.id, intA.id);
+    const convB = await createTestConversation(sql, clinicB.id, intB.id);
+
+    await expect(sql`
+      SELECT escalate_conversation(${convB.id}::uuid, ${clinicA.id}::uuid, 'forge attempt')
+    `).rejects.toThrow(/cross-tenant violation/);
+
+    // Sanity: ambas conversations permanecem inalteradas.
+    const states = await sql<{ id: string; state: string; escalated_via: string | null }[]>`
+      SELECT id, state, escalated_via FROM conversations WHERE id IN (${convA.id}, ${convB.id})
+    `;
+    expect(states.find((r) => r.id === convA.id)?.state).toBe('ai_handling');
+    expect(states.find((r) => r.id === convB.id)?.state).toBe('ai_handling');
+    expect(states.find((r) => r.id === convA.id)?.escalated_via).toBeNull();
+    expect(states.find((r) => r.id === convB.id)?.escalated_via).toBeNull();
+  });
+
+  it('transition_conversation_state: NÃO valida tenant interno (caller layer responsibility — toggle action faz guard antes)', async () => {
+    // Esse teste documenta decisão arquitetural: a RPC permite ANY caller com
+    // EXECUTE permission mudar state de QUALQUER conversation. Cross-tenant
+    // guard é feito ANTES da RPC pelos callers (toggleAiHandlingAction:33-40
+    // checa conv.clinic_id === ctx.clinicId; escalate_conversation function
+    // checa internamente). Se essa proteção movesse pra dentro da RPC,
+    // quebraria webhooks/workers que legitimamente precisam transitar state
+    // de conversations cross-clinic-context (caller já validou pelo URL).
+    //
+    // Esse comportamento É testado pra garantir que mudanças futuras na RPC
+    // não introduzam guard indevido (que quebraria toggleAiHandlingAction +
+    // chat.test.ts state machine tests).
+    const clinic = await makeClinic('Xtenant-TC-Doc');
+    const integration = await createTestIntegration(sql, clinic.id);
+    const conv = await createTestConversation(sql, clinic.id, integration.id);
+
+    // Service-role-direct call: function aceita sem perguntar quem chama.
+    await sql`
+      SELECT transition_conversation_state(${conv.id}::uuid, 'waiting_human', 'doc-test')
+    `;
+    const [row] = await sql<{ state: string }[]>`
+      SELECT state FROM conversations WHERE id = ${conv.id}
+    `;
+    expect(row?.state).toBe('waiting_human');
   });
 });
