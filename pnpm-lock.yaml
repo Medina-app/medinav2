@@ -259,6 +259,9 @@ importers:
       drizzle-kit:
         specifier: ^0.30.0
         version: 0.30.6
+      openai:
+        specifier: ^6.36.0
+        version: 6.36.0(ws@8.20.0)(zod@4.4.3)
       tsx:
         specifier: ^4.19.3
         version: 4.21.0
@@ -10163,6 +10166,11 @@ snapshots:
     optionalDependencies:
       ws: 8.20.0
       zod: 3.25.76
+
+  openai@6.36.0(ws@8.20.0)(zod@4.4.3):
+    optionalDependencies:
+      ws: 8.20.0
+      zod: 4.4.3
 
   openapi-types@12.1.3: {}
 
