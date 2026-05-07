@@ -38,7 +38,7 @@ beforeEach(() => {
 })
 
 describe('search_kb', () => {
-  it('calls search_knowledge_chunks with clinic_id from ctx, top_k=3, and generates embedding from the query', async () => {
+  it('calls search_knowledge_chunks_internal with clinic_id from ctx, top_k=3, and generates embedding from the query', async () => {
     const { generateEmbedding } = await import('../../src/embeddings.js')
     const { buildSearchKbTool } = await import('../../src/tools/search-kb.js')
     const mock = buildMockSupabase({}, { data: [], error: null })
@@ -50,7 +50,7 @@ describe('search_kb', () => {
 
     expect(generateEmbedding).toHaveBeenCalledWith('qual o horário?')
     expect(mock.rpc).toHaveBeenCalledWith(
-      'search_knowledge_chunks',
+      'search_knowledge_chunks_internal',
       expect.objectContaining({ target_clinic_id: 'clinic-A', top_k: 3 }),
     )
   })
@@ -108,7 +108,7 @@ describe('search_kb', () => {
     await tool.execute({ query: 'q' })
 
     expect(mock.rpc).toHaveBeenCalledWith(
-      'search_knowledge_chunks',
+      'search_knowledge_chunks_internal',
       expect.objectContaining({ document_filter: ['doc-x', 'doc-y'] }),
     )
   })
@@ -125,7 +125,7 @@ describe('search_kb', () => {
     await tool.execute({ query: 'q' })
 
     expect(mock.rpc).toHaveBeenCalledWith(
-      'search_knowledge_chunks',
+      'search_knowledge_chunks_internal',
       expect.objectContaining({ document_filter: null }),
     )
   })

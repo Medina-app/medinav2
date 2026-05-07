@@ -31,7 +31,7 @@ describe('retrieveKnowledge', () => {
     mockRpc.mockResolvedValue({ data: sampleRows, error: null })
   })
 
-  it('calls search_knowledge_chunks with correct target_clinic_id', async () => {
+  it('calls search_knowledge_chunks_internal with correct target_clinic_id', async () => {
     const { retrieveKnowledge } = await import('../src/rag.js')
     await retrieveKnowledge({
       clinicId: 'clinic-123',
@@ -39,7 +39,7 @@ describe('retrieveKnowledge', () => {
       supabase: mockSupabase,
     })
     expect(mockRpc).toHaveBeenCalledWith(
-      'search_knowledge_chunks',
+      'search_knowledge_chunks_internal',
       expect.objectContaining({ target_clinic_id: 'clinic-123' })
     )
   })
@@ -53,7 +53,7 @@ describe('retrieveKnowledge', () => {
       supabase: mockSupabase,
     })
     expect(mockRpc).toHaveBeenCalledWith(
-      'search_knowledge_chunks',
+      'search_knowledge_chunks_internal',
       expect.objectContaining({ document_filter: ['doc-a', 'doc-b'] })
     )
   })
@@ -66,7 +66,7 @@ describe('retrieveKnowledge', () => {
       supabase: mockSupabase,
     })
     expect(mockRpc).toHaveBeenCalledWith(
-      'search_knowledge_chunks',
+      'search_knowledge_chunks_internal',
       expect.objectContaining({ document_filter: null })
     )
   })

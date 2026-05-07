@@ -353,6 +353,125 @@ describe('search_knowledge_chunks: vector similarity', () => {
   });
 });
 
+// ─── search_knowledge_chunks_internal: service_role variant (migration 0017) ──
+// Production reproduction of the AI-3 RAG bug: the user-facing
+// search_knowledge_chunks runs is_clinic_member(target_clinic_id) which
+// defaults p_user_id to auth.uid(). Under service_role JWT, auth.uid() is
+// NULL → membership lookup never matches → RAISE EXCEPTION. The Inngest
+// worker uses service_role, so the search_kb tool was always failing in prod.
+//
+// Migration 0017 adds search_knowledge_chunks_internal (no membership check,
+// service_role-only GRANT) for the worker path.
+
+describe('search_knowledge_chunks_internal: service_role variant', () => {
+  it('original search_knowledge_chunks raises under service_role (regression baseline)', async () => {
+    const clinic = await makeClinic('Internal SR Baseline');
+    const doc = await createTestKnowledgeDocument(sql, clinic.id);
+    const emb = `[${Array(1536).fill(0.1).join(',')}]`;
+    const query = `[${Array(1536).fill(0.1).join(',')}]`;
+    await sql`
+      INSERT INTO knowledge_chunks (clinic_id, document_id, chunk_index, content, token_count, embedding)
+      VALUES (${clinic.id}, ${doc.id}, 0, 'Anything', 5, ${emb}::vector)
+    `;
+
+    await expect(
+      sql.begin(async (tx) => {
+        await tx`SET LOCAL role = 'service_role'`;
+        return tx`
+          SELECT * FROM search_knowledge_chunks(${clinic.id}::uuid, ${query}::vector, 5)
+        `;
+      }),
+    ).rejects.toThrow(/caller is not a member of clinic/i);
+  });
+
+  it('search_knowledge_chunks_internal succeeds under service_role and returns chunks of the target clinic', async () => {
+    const clinic = await makeClinic('Internal SR Success');
+    const doc = await createTestKnowledgeDocument(sql, clinic.id);
+    const emb = `[${Array(1536).fill(0.1).join(',')}]`;
+    const query = `[${Array(1536).fill(0.1).join(',')}]`;
+    await sql`
+      INSERT INTO knowledge_chunks (clinic_id, document_id, chunk_index, content, token_count, embedding)
+      VALUES (${clinic.id}, ${doc.id}, 0, 'Service role chunk', 5, ${emb}::vector)
+    `;
+
+    const rows = await sql.begin(async (tx) => {
+      await tx`SET LOCAL role = 'service_role'`;
+      return tx<{ chunk_id: string; document_id: string; content: string; similarity: number }[]>`
+        SELECT chunk_id, document_id, content, similarity
+        FROM search_knowledge_chunks_internal(${clinic.id}::uuid, ${query}::vector, 5)
+      `;
+    });
+
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows[0]?.content).toBe('Service role chunk');
+    expect(typeof rows[0]?.similarity).toBe('number');
+  });
+
+  it('search_knowledge_chunks_internal isolates results by clinic_id (cross-tenant)', async () => {
+    const cA = await makeClinic('Internal SR Iso A');
+    const cB = await makeClinic('Internal SR Iso B');
+    const docA = await createTestKnowledgeDocument(sql, cA.id);
+    const docB = await createTestKnowledgeDocument(sql, cB.id);
+    const emb = `[${Array(1536).fill(0.1).join(',')}]`;
+    const query = `[${Array(1536).fill(0.1).join(',')}]`;
+    await sql`
+      INSERT INTO knowledge_chunks (clinic_id, document_id, chunk_index, content, token_count, embedding)
+      VALUES (${cA.id}, ${docA.id}, 0, 'A chunk', 5, ${emb}::vector),
+             (${cB.id}, ${docB.id}, 0, 'B chunk', 5, ${emb}::vector)
+    `;
+
+    const rows = await sql.begin(async (tx) => {
+      await tx`SET LOCAL role = 'service_role'`;
+      return tx<{ document_id: string; content: string }[]>`
+        SELECT document_id, content
+        FROM search_knowledge_chunks_internal(${cA.id}::uuid, ${query}::vector, 10)
+      `;
+    });
+
+    expect(rows.every((r) => r.document_id === docA.id)).toBe(true);
+    expect(rows.some((r) => r.content === 'B chunk')).toBe(false);
+  });
+
+  it('search_knowledge_chunks_internal is NOT executable by authenticated role (GRANT check)', async () => {
+    const clinic = await makeClinic('Internal SR Grant');
+    const user = await createTestUser(sql);
+    await addUserToClinic(sql, clinic.id, user.id, 'member');
+    const query = `[${Array(1536).fill(0.1).join(',')}]`;
+
+    await expect(
+      getRlsClient(sql, user.id).query((tx) =>
+        tx`SELECT * FROM search_knowledge_chunks_internal(${clinic.id}::uuid, ${query}::vector, 5)`,
+      ),
+    ).rejects.toThrow(/permission denied/i);
+  });
+
+  it('search_knowledge_chunks_internal respects document_filter when supplied', async () => {
+    const clinic = await makeClinic('Internal SR DocFilter');
+    const docA = await createTestKnowledgeDocument(sql, clinic.id, { title: 'Doc A' });
+    const docB = await createTestKnowledgeDocument(sql, clinic.id, { title: 'Doc B' });
+    const emb = `[${Array(1536).fill(0.1).join(',')}]`;
+    const query = `[${Array(1536).fill(0.1).join(',')}]`;
+    await sql`
+      INSERT INTO knowledge_chunks (clinic_id, document_id, chunk_index, content, token_count, embedding)
+      VALUES (${clinic.id}, ${docA.id}, 0, 'From A', 5, ${emb}::vector),
+             (${clinic.id}, ${docB.id}, 0, 'From B', 5, ${emb}::vector)
+    `;
+
+    const rows = await sql.begin(async (tx) => {
+      await tx`SET LOCAL role = 'service_role'`;
+      return tx<{ document_id: string; content: string }[]>`
+        SELECT document_id, content
+        FROM search_knowledge_chunks_internal(
+          ${clinic.id}::uuid, ${query}::vector, 10, ARRAY[${docA.id}]::uuid[]
+        )
+      `;
+    });
+
+    expect(rows.every((r) => r.document_id === docA.id)).toBe(true);
+    expect(rows.some((r) => r.content === 'From B')).toBe(false);
+  });
+});
+
 // ─── audit log ────────────────────────────────────────────────────────────────
 
 describe('audit log: agent_config status changes', () => {
