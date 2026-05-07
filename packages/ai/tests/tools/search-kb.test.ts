@@ -23,7 +23,7 @@ const SAMPLE_ROWS = [
   { chunk_id: 'c1', document_id: 'd1', content: 'Cardio R$ 350,00', similarity: 0.92, metadata: {} },
   { chunk_id: 'c2', document_id: 'd1', content: 'Eletrocardiograma R$ 90,00', similarity: 0.85, metadata: {} },
   { chunk_id: 'c3', document_id: 'd2', content: 'FAQ agendamento', similarity: 0.72, metadata: {} },
-  { chunk_id: 'c4', document_id: 'd2', content: 'low relevance', similarity: 0.55, metadata: {} },
+  { chunk_id: 'c4', document_id: 'd2', content: 'low relevance', similarity: 0.35, metadata: {} },
 ]
 
 const DOC_TITLES = [
@@ -55,7 +55,7 @@ describe('search_kb', () => {
     )
   })
 
-  it('returns chunks above similarity threshold 0.7, dropping lower ones (rag.ts filter)', async () => {
+  it('returns chunks above similarity threshold 0.4, dropping lower ones (rag.ts filter)', async () => {
     const { buildSearchKbTool } = await import('../../src/tools/search-kb.js')
     const mock = buildMockSupabase(
       { knowledge_documents: { inResult: DOC_TITLES } },
@@ -67,7 +67,7 @@ describe('search_kb', () => {
 
     if (!result.found) throw new Error('expected found=true')
     expect(result.snippets).toHaveLength(3)
-    expect(result.snippets.every((s) => s.similarity >= 0.7)).toBe(true)
+    expect(result.snippets.every((s) => s.similarity >= 0.4)).toBe(true)
   })
 
   it('returns { found: false, snippets: [] } when RPC returns no chunks', async () => {
@@ -83,7 +83,7 @@ describe('search_kb', () => {
 
   it('returns { found: false } when all chunks are below threshold (e.g. KB miss with weak hits)', async () => {
     const { buildSearchKbTool } = await import('../../src/tools/search-kb.js')
-    const weakRows = [{ chunk_id: 'c1', document_id: 'd1', content: 'x', similarity: 0.45, metadata: {} }]
+    const weakRows = [{ chunk_id: 'c1', document_id: 'd1', content: 'x', similarity: 0.25, metadata: {} }]
     const mock = buildMockSupabase({}, { data: weakRows, error: null })
     const tool = asTool(buildSearchKbTool(buildToolContext({ supabase: mock.supabase as never })))
 
@@ -205,7 +205,7 @@ describe('search_kb', () => {
     expect(meta).toMatchObject({
       query: 'qual valor cardio?',
       top_k: 3,
-      threshold: 0.7,
+      threshold: 0.4,
       found_count: 1,
     })
     expect(meta['top_similarity']).toBeCloseTo(0.92)

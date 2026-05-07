@@ -14,7 +14,13 @@ const InputSchema = z.object({
 })
 
 const TOP_K = 3
-const SIMILARITY_THRESHOLD = 0.7
+// Empirically tuned for text-embedding-3-small + PT-BR queries. PR #20 + smoke
+// prod showed real query similarities cap at ~0.5–0.65 even for direct hits
+// (e.g. "qual o valor da consulta cardiológica?" against the chunk "Consulta
+// cardiológica: R$ 350,00..."), so 0.7 produced 100% false negatives. 0.4
+// catches the long tail; mitigated by the system prompt instruction
+// "NUNCA invente informações que não estão no search_kb".
+const SIMILARITY_THRESHOLD = 0.4
 
 export function buildSearchKbTool(ctx: ToolContext) {
   return createTool({
