@@ -32,7 +32,12 @@ export async function retrieveKnowledge(
 
   const embedding = await generateEmbedding(query)
 
-  const { data, error } = await supabase.rpc('search_knowledge_chunks', {
+  // Calls the service_role-only variant (migration 0017). The user-facing
+  // `search_knowledge_chunks` enforces is_clinic_member(), which fails under
+  // service_role because auth.uid() is NULL inside the Inngest worker — the
+  // dispatcher already validates conversation.clinic_id cross-tenant, so we
+  // pass the validated clinic_id and the function trusts it.
+  const { data, error } = await supabase.rpc('search_knowledge_chunks_internal', {
     target_clinic_id: clinicId,
     query_embedding: embedding,
     top_k: topK,
