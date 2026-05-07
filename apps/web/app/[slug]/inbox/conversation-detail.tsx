@@ -10,6 +10,7 @@ import SendMessageForm from './send-message-form';
 import MessageBubble from './_components/MessageBubble';
 import { AiHandlingToggle } from './_components/AiHandlingToggle';
 import { hasActiveMessages } from './_components/has-active-messages';
+import { getEscalationBadgeProps } from './_components/escalation-badge';
 import { retryFailedMessageAction } from './retry-action';
 import { useCentrifugo } from '@/lib/realtime/use-centrifugo';
 
@@ -81,6 +82,7 @@ export default function ConversationDetail({
   const headerName = conversation.patient?.fullName ?? conversation.externalId;
   const phone = conversation.patient?.phone ?? conversation.externalId;
   const stateLabel = STATE_LABEL[conversation.state] ?? conversation.state;
+  const escalationBadge = getEscalationBadgeProps(conversation.escalatedVia ?? null);
 
   return (
     <div className="flex flex-col h-full">
@@ -98,6 +100,15 @@ export default function ConversationDetail({
           <div className="text-[12px] text-[var(--luma-text-tertiary)] truncate">{phone}</div>
         </div>
         <AiHandlingToggle conversationId={conversation.id} state={conversation.state} />
+        {escalationBadge ? (
+          <span
+            className={escalationBadge.className}
+            title={escalationBadge.title}
+            data-testid="escalation-badge"
+          >
+            {escalationBadge.label}
+          </span>
+        ) : null}
         <span className="text-[11px] font-medium text-[var(--luma-text-secondary)] bg-[var(--luma-bg-subtle)] rounded-full px-2.5 py-0.5">
           {stateLabel}
         </span>

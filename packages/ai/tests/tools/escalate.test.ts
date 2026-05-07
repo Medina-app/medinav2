@@ -13,91 +13,58 @@ function asTool(t: unknown): ToolWithExecute {
   return t as ToolWithExecute
 }
 
-describe('escalate_to_human', () => {
-  it('transitions ai_handling → waiting_human via RPC with reason', async () => {
-    const mock = buildMockSupabase({
-      conversations: { single: { id: 'conv-1', state: 'ai_handling', clinic_id: 'clinic-A' } },
-    })
+// PR-A: escalate.ts now delegates everything to the atomic
+// public.escalate_conversation(uuid, uuid, text) RETURNS boolean RPC.
+// The TS layer only:
+//   1. Validates input via Zod (reason min 3 chars).
+//   2. Calls supabase.rpc('escalate_conversation', { p_conversation_id, p_clinic_id, p_reason }).
+//   3. Maps RPC result:
+//        data === false   -> { ok: false, error: 'ja_transferida' }  (idempotent)
+//        error !== null   -> throw                                   (cross-tenant, invalid state, etc)
+//        otherwise        -> { ok: true }
+// Cross-tenant guard, system message INSERT, audit_logs INSERT, and state
+// transition validation all live inside the PL/pgSQL function. Covered by
+// packages/db/tests/rls/cross-tenant-ai.test.ts integration tests, not here.
+describe('escalate_to_human (PR-A: atomic RPC)', () => {
+  it('calls escalate_conversation RPC with p_conversation_id, p_clinic_id, p_reason and returns ok=true', async () => {
+    const mock = buildMockSupabase({}, { data: true, error: null })
     const tool = asTool(buildEscalateTool(buildToolContext({ supabase: mock.supabase as never })))
 
     const result = await tool.execute({ reason: 'paciente com urgência médica' })
 
     expect(result.ok).toBe(true)
-    expect(mock.rpc).toHaveBeenCalledWith('transition_conversation_state', {
-      conv_id: 'conv-1',
-      new_state: 'waiting_human',
-      reason: 'agent_escalated:paciente com urgência médica',
+    expect(mock.rpc).toHaveBeenCalledTimes(1)
+    expect(mock.rpc).toHaveBeenCalledWith('escalate_conversation', {
+      p_conversation_id: 'conv-1',
+      p_clinic_id: 'clinic-A',
+      p_reason: 'paciente com urgência médica',
     })
-  })
-
-  it('inserts system message with sender_type=system and content_type=system', async () => {
-    const mock = buildMockSupabase({
-      conversations: { single: { id: 'conv-1', state: 'ai_handling', clinic_id: 'clinic-A' } },
-    })
-    await asTool(buildEscalateTool(buildToolContext({ supabase: mock.supabase as never })))
-      .execute({ reason: 'urgência' })
-
-    const msgInsert = mock.insertCalls.find((c) => c.table === 'messages')
-    expect(msgInsert).toBeDefined()
-    expect(msgInsert!.payload).toMatchObject({
-      clinic_id: 'clinic-A',
-      conversation_id: 'conv-1',
-      direction: 'outbound',
-      sender_type: 'system',
-      content_type: 'system',
-    })
-    expect((msgInsert!.payload as { content: string }).content).toContain('urgência')
-  })
-
-  it('rejects when conversation belongs to different clinic (cross-tenant)', async () => {
-    const mock = buildMockSupabase({
-      conversations: { single: { id: 'conv-1', state: 'ai_handling', clinic_id: 'clinic-OTHER' } },
-    })
-    const ctx = buildToolContext({ supabase: mock.supabase as never, clinicId: 'clinic-A' })
-
-    await expect(
-      asTool(buildEscalateTool(ctx)).execute({ reason: 'paciente nervoso' }),
-    ).rejects.toThrow(/cross-tenant/i)
-
-    expect(mock.rpc).not.toHaveBeenCalled()
-  })
-
-  it('returns idempotent error when already waiting_human (no RPC, no inserts)', async () => {
-    const mock = buildMockSupabase({
-      conversations: { single: { id: 'conv-1', state: 'waiting_human', clinic_id: 'clinic-A' } },
-    })
-    const result = await asTool(
-      buildEscalateTool(buildToolContext({ supabase: mock.supabase as never })),
-    ).execute({ reason: 'urgência' })
-
-    expect(result.ok).toBe(false)
-    expect(result.error).toBe('já_transferida')
-    expect(mock.rpc).not.toHaveBeenCalled()
+    // No direct INSERTs from the TS layer — the function does it all.
     expect(mock.insertCalls).toHaveLength(0)
   })
 
-  it('writes audit_logs row with action=agent.tool.escalate and user_id=null', async () => {
-    const mock = buildMockSupabase({
-      conversations: { single: { id: 'conv-1', state: 'ai_handling', clinic_id: 'clinic-A' } },
-    })
-    await asTool(buildEscalateTool(buildToolContext({ supabase: mock.supabase as never })))
-      .execute({ reason: 'paciente irritado' })
+  it('returns ok=false with error="já_transferida" when RPC returns data=false (idempotent)', async () => {
+    const mock = buildMockSupabase({}, { data: false, error: null })
+    const tool = asTool(buildEscalateTool(buildToolContext({ supabase: mock.supabase as never })))
 
-    const auditInsert = mock.insertCalls.find((c) => c.table === 'audit_logs')
-    expect(auditInsert).toBeDefined()
-    expect(auditInsert!.payload).toMatchObject({
-      clinic_id: 'clinic-A',
-      user_id: null,
-      action: 'agent.tool.escalate',
-      resource: 'conversations',
-      resource_id: 'conv-1',
-    })
-    expect((auditInsert!.payload as { metadata: { reason: string } }).metadata.reason).toBe(
-      'paciente irritado',
-    )
+    const result = await tool.execute({ reason: 'tentando escalar de novo' })
+
+    expect(result.ok).toBe(false)
+    expect(result.error).toBe('já_transferida')
+    expect(mock.insertCalls).toHaveLength(0)
   })
 
-  it('Zod validates reason min length', () => {
+  it('throws when RPC returns error (cross-tenant violation propagates from PL/pgSQL)', async () => {
+    const mock = buildMockSupabase(
+      {},
+      { data: null, error: { message: 'cross-tenant violation: conversation X belongs to Y, not Z' } },
+    )
+    const tool = asTool(buildEscalateTool(buildToolContext({ supabase: mock.supabase as never })))
+
+    await expect(tool.execute({ reason: 'malicious' })).rejects.toThrow(/cross-tenant violation/)
+  })
+
+  it('Zod validates reason min length (3 chars)', () => {
     const tool = asTool(buildEscalateTool(buildToolContext()))
     expect(tool.inputSchema.safeParse({ reason: 'x' }).success).toBe(false)
     expect(tool.inputSchema.safeParse({ reason: 'paciente irritado' }).success).toBe(true)
