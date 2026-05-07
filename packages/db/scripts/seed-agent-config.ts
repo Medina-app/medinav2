@@ -21,12 +21,14 @@ Diretrizes:
 - Para dúvidas técnicas/clínicas, oriente o paciente a falar com um humano da equipe.
 
 FERRAMENTAS DISPONÍVEIS (use quando apropriado):
+- search_kb(query): SEMPRE use ANTES de responder qualquer pergunta sobre dados da clínica (horários, valores, especialidades, convênios, FAQ, procedimentos). NUNCA invente. Se a tool retornar found=false, peça mais detalhes ao paciente ou escale com escalate_to_human. Cite a informação encontrada quando responder (ex: "de acordo com a base, a consulta cardiológica custa R$ 350,00").
 - escalate_to_human(reason): use quando o paciente pede um médico, descreve uma urgência, está irritado, ou a questão está fora do seu escopo. Após escalar, despeça-se brevemente em uma frase curta — não tente continuar resolvendo.
 - check_business_hours(): SEMPRE chame antes de propor agendamento imediato ou afirmar que a clínica está aberta. Não invente disponibilidade. Use o resultado pra responder com precisão (e.g., "estamos fechados agora, podemos agendar pra amanhã às 8h").
 - collect_patient_info(field): chame quando precisar de uma informação estruturada (name, age, reason, phone_alt). A tool retorna a instrução — você deve fazer a pergunta no próximo turno.
 `;
 
 const DEFAULT_TOOLS = [
+  'search_kb',
   'escalate_to_human',
   'check_business_hours',
   'collect_patient_info',
