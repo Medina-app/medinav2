@@ -76,7 +76,7 @@ export async function dispatchAgent(args: DispatchAgentArgs): Promise<DispatchRe
   // 2. Load the active published agent_config for this clinic + agentName.
   const { data: cfg } = await supabase
     .from('agent_configs')
-    .select('id, system_prompt, model, temperature, max_tokens, name, tools')
+    .select('id, system_prompt, model, temperature, max_tokens, name, tools, knowledge_document_ids')
     .eq('clinic_id', clinicId)
     .eq('status', 'published')
     .eq('name', agentName)
@@ -102,8 +102,13 @@ export async function dispatchAgent(args: DispatchAgentArgs): Promise<DispatchRe
     }))
 
   // 4. Build tools bound to this dispatch context, then construct the agent.
+  //    knowledge_document_ids is AI-3 wiring: search_kb reads it from ToolContext
+  //    to filter pgvector results. Empty array means "all docs" — search_kb
+  //    converts that to null document_filter for the RPC.
   const toolNames = (cfg.tools as string[] | null) ?? []
-  const toolCtx: ToolContext = { clinicId, conversationId, supabase }
+  const knowledgeDocumentIds =
+    ((cfg as { knowledge_document_ids?: string[] | null }).knowledge_document_ids ?? []) as readonly string[]
+  const toolCtx: ToolContext = { clinicId, conversationId, supabase, knowledgeDocumentIds }
   const tools = buildToolsFromConfig(toolCtx, toolNames)
   const { agent } = await createAgent({ clinicId, agentName, supabase, tools })
 
