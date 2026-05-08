@@ -315,13 +315,18 @@ export async function createTestAgentConfig(
 export async function createTestKnowledgeDocument(
   sql: postgres.Sql,
   clinicId: string,
-  opts: { title?: string; sourceType?: string } = {},
+  opts: { title?: string; sourceType?: string; approvalStatus?: string } = {},
 ): Promise<{ id: string; clinic_id: string }> {
   const title = opts.title ?? `Doc ${Date.now()}`;
   const sourceType = opts.sourceType ?? 'manual';
+  // AI-3.5b: default 'approved' pra back-compat com testes que assumem
+  // chunks visíveis pela RPC search_knowledge_chunks_internal (que filtra
+  // approval_status='approved'). Testes que precisam validar o workflow
+  // de approval passam approvalStatus explicitamente.
+  const approvalStatus = opts.approvalStatus ?? 'approved';
   const rows = await sql<{ id: string; clinic_id: string }[]>`
-    INSERT INTO knowledge_documents (clinic_id, title, source_type)
-    VALUES (${clinicId}, ${title}, ${sourceType})
+    INSERT INTO knowledge_documents (clinic_id, title, source_type, approval_status)
+    VALUES (${clinicId}, ${title}, ${sourceType}, ${approvalStatus})
     RETURNING id, clinic_id
   `;
   const row = rows[0];

@@ -6,15 +6,24 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { getKbStatusBadge, type DocumentStatus } from './kb-status-badge';
+import {
+  getKbStatusBadge,
+  type DocumentStatus,
+  type ApprovalStatus,
+} from './kb-status-badge';
 import { DeleteDocDialog } from './delete-doc-dialog';
+import { ApproveButton } from './approve-button';
+import { RejectDialog } from './reject-dialog';
+import { ReindexButton } from './reindex-button';
 
 export interface KbDocument {
   id: string;
   title: string;
   sourceType: 'pdf' | 'docx' | 'txt' | 'md' | 'url' | 'manual';
   status: DocumentStatus;
+  approvalStatus: ApprovalStatus;
   errorMessage: string | null;
+  rejectionReason: string | null;
   chunkCount: number;
   totalTokens: number;
   fileSizeBytes: number | null;
@@ -23,6 +32,8 @@ export interface KbDocument {
 
 interface KbDocumentListProps {
   documents: readonly KbDocument[];
+  /** Quando true (admin/owner), renderiza botões de aprovação/rejeição. */
+  canModerate: boolean;
 }
 
 const SOURCE_LABEL: Record<KbDocument['sourceType'], string> = {
@@ -50,12 +61,16 @@ function formatSize(bytes: number | null): string {
 }
 
 /**
- * AI-3.5a: tabela de documents da KB. Renderiza title, type, status badge,
- * chunks count, size, data, e botão delete (via DeleteDocDialog client).
+ * AI-3.5a/b: tabela de documents da KB.
  *
- * Pure presentational — toda mutação via DeleteDocDialog → server action.
+ * AI-3.5b: badge agora considera approval_status (precedência sobre status).
+ * Botões condicionais por approval_status:
+ *   - pending_approval + canModerate → Aprovar / Rejeitar
+ *   - approved + canModerate → Re-indexar (apenas approved pode re-disparar)
+ *   - rejected → sem botões de ação (apenas Excluir)
+ *   - todos → Excluir (admin/owner)
  */
-export function KbDocumentList({ documents }: KbDocumentListProps) {
+export function KbDocumentList({ documents, canModerate }: KbDocumentListProps) {
   return (
     <Table>
       <TableHeader>
@@ -85,7 +100,12 @@ export function KbDocumentList({ documents }: KbDocumentListProps) {
       </TableHeader>
       <TableBody>
         {documents.map((doc) => {
-          const badge = getKbStatusBadge(doc.status, doc.errorMessage);
+          // Badge title pra rejected mostra rejection_reason; pra failed,
+          // errorMessage. getKbStatusBadge prioriza approval_status quando
+          // != 'approved'.
+          const titleHint =
+            doc.approvalStatus === 'rejected' ? doc.rejectionReason : doc.errorMessage;
+          const badge = getKbStatusBadge(doc.status, titleHint, doc.approvalStatus);
           return (
             <TableRow
               key={doc.id}
@@ -116,7 +136,20 @@ export function KbDocumentList({ documents }: KbDocumentListProps) {
                 {formatDate(doc.createdAt)}
               </TableCell>
               <TableCell className="text-right">
-                <DeleteDocDialog documentId={doc.id} documentTitle={doc.title} />
+                <div className="flex items-center justify-end gap-1.5 flex-wrap">
+                  {canModerate && doc.approvalStatus === 'pending_approval' && (
+                    <>
+                      <ApproveButton documentId={doc.id} />
+                      <RejectDialog documentId={doc.id} documentTitle={doc.title} />
+                    </>
+                  )}
+                  {canModerate && doc.approvalStatus === 'approved' && (
+                    <ReindexButton documentId={doc.id} />
+                  )}
+                  {canModerate && (
+                    <DeleteDocDialog documentId={doc.id} documentTitle={doc.title} />
+                  )}
+                </div>
               </TableCell>
             </TableRow>
           );
