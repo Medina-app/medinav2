@@ -40,34 +40,78 @@
 
 import type { GuardrailsConfig } from './types.js'
 
+/**
+ * Lista de doenças/condições reconhecidas em PT-BR coloquial. Usada em 2
+ * patterns de diagnosis_request: a forma user-shape ("é alergia?") e a
+ * forma LLM-shape ("você tem alergia"). DRY single source of truth — adicionar
+ * doença aqui propaga pros 2 sites.
+ */
+const DISEASE_LIST =
+  'alergia|gripe|dengue|covid|virose|gastrite|refluxo|infec[cç][aã]o|infec[cç][oõ]es|enxaqueca|c[aâ]ncer|tumor|sinusite|amigdalite|bronquite|asma|pneumonia|labirintite|diabete[s]?|infarto|enfarte|av[ce]|press[aã]o (alta|baixa)'
+
+/**
+ * Lista de classes terapêuticas + medicamentos comuns que LLM pode acabar
+ * recomendando. Inclui princípios ativos populares (dipirona, paracetamol,
+ * ibuprofeno) + classes (antibiótico, analgésico).
+ */
+const MED_LIST =
+  'rem[eé]dio|medicamento|antibi[oó]tico|analg[eé]sico|anti[- ]?inflamat[oó]rio|dipirona|paracetamol|ibuprofeno|amoxicilina|nimesulida|omeprazol|losartana'
+
 export const DEFAULT_BLOCKED_PATTERNS: Record<string, RegExp[]> = {
   diagnosis_request: [
+    // ─── User-shape (interrogativo) ─────────────────────────────────────────
     // "o que tenho", "o que eu tenho", "o que será que tenho"
     /\bo que (eu )?(tenho|ser[aá] que tenho)\b/i,
     // "qual minha doença", "qual a doença", "que doença é essa"
     /\b(qual (é |e )?(minha|a) doen[cç]a|que doen[cç]a)\b/i,
     // Severity probes: "isso é grave/sério/preocupante"
     /\bisso (e|é) (grave|s[eé]rio|s[eé]ria|preocupante)\b/i,
-    // Direct disease ID question: "é câncer?", "é tumor?", "é infecção?"
+    // "é alergia?", "é dengue?", "é câncer?" (qualquer doença da DISEASE_LIST)
     // Anchor com (?:^|\s) em vez de \b porque 'é' não é \w em regex JS (sem flag /u)
     // — \bé não casa quando precedido por espaço/início; whitespace/start é robusto.
-    /(?:^|\s)(e|é) (c[aâ]ncer|tumor|infec[cç][aã]o|infec[cç][oõ]es|av[ce]|infarto|enfarte)\b/i,
+    new RegExp(`(?:^|\\s)(e|é) (uma |um )?(${DISEASE_LIST})\\b`, 'i'),
+    // ─── LLM-shape (declarativo) ────────────────────────────────────────────
+    // "você tem alergia", "você está com gripe", "você sofre de diabetes"
+    new RegExp(`\\bvocê (tem|est[aá] com|sofre de) (uma |um )?(${DISEASE_LIST})\\b`, 'i'),
+    // "parece (ser) uma alergia", "parece dengue"
+    new RegExp(`\\bparece (ser )?(uma |um )?(${DISEASE_LIST})\\b`, 'i'),
+    // "diagnóstico é/de", "prognóstico é/de"
+    /\b(diagn[oó]stico|progn[oó]stico) (é|de)\b/i,
   ],
   medication_request: [
+    // ─── User-shape (interrogativo) ─────────────────────────────────────────
     // "qual remédio devo tomar", "que medicamento posso tomar"
     /\b(qual|que) (rem[eé]dio|medicamento) (devo|posso|tenho que) tomar\b/i,
     // "posso tomar dipirona/algum remédio/antibiótico"
-    /\b(posso|devo) tomar (algum|um|o |a |esse |esses )?(rem[eé]dio|medicamento|antibi[oó]tico|analg[eé]sico|anti[- ]?inflamat[oó]rio|dipirona|paracetamol|ibuprofeno)\b/i,
+    new RegExp(
+      `\\b(posso|devo) tomar (algum|um|o |a |esse |esses )?(${MED_LIST})\\b`,
+      'i',
+    ),
     // "me indica algum remédio"
-    /\bme (indica|indique|recomenda) (algum |um )?(rem[eé]dio|medicamento)\b/i,
+    /\bme (indica|indique|recomenda|prescreve) (algum |um )?(rem[eé]dio|medicamento)\b/i,
     // Dosage questions: "qual a dosagem", "quantos mg"
     /\b(qual (a |o )?dosagem|quantos? mg|quantas? gotas)\b/i,
+    // ─── LLM-shape (declarativo) ────────────────────────────────────────────
+    // "você pode tomar paracetamol", "deve tomar dipirona"
+    new RegExp(
+      `\\b(você )?(pode|deve|deveria) tomar (uma |um )?(${MED_LIST})\\b`,
+      'i',
+    ),
+    // "recomendo dipirona", "recomendo que tome", "sugiro paracetamol"
+    new RegExp(
+      `\\b(recomendo|sugiro|indico) (que (você )?(tome|use)|tomar|usar)?(.*?)?(${MED_LIST})\\b`,
+      'i',
+    ),
+    // "tome 1 comprimido/gotas", "use 5 ml"
+    /\b(tome|use) (\d+|uma|um|umas|uns) (comprimidos?|gotas|c[aá]psulas?|ml|sachês?|colheres?)\b/i,
+    // Prescrição com dosagem inline: "paracetamol 500mg", "dipirona 1g"
+    new RegExp(`\\b(${MED_LIST}) \\d+ ?(mg|g|ml|gotas)\\b`, 'i'),
   ],
   diagnostic_advice: [
     // "é normal/anormal/preocupante" (questão clínica de avaliação)
     // Mesmo motivo do anchor (?:^|\s): 'é' não é \w em regex JS sem flag /u.
     /(?:^|\s)(e|é) (normal|anormal|preocupante)\b/i,
-    // "vai melhorar/piorar"
+    // "vai melhorar/piorar/sarar"
     /\bvai (melhorar|piorar|sarar)\b/i,
     // "preciso ir no médico/hospital", "preciso me consultar"
     /\bprecis(o|a|amos) (ir |me )?(consultar|no m[eé]dico|no hospital|no pronto[- ]?socorro)\b/i,
