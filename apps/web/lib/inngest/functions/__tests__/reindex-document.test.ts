@@ -12,6 +12,9 @@ const fakeStep: StepLike = {
 
 function makeDeps(overrides: Partial<ReindexDocumentDeps> = {}): ReindexDocumentDeps {
   return {
+    // Issue #18: cross-tenant guard — produção verifica ownership antes de
+    // chunkar/embedar. Default mock retorna mesma clinic do baseEvent.
+    loadDocumentClinicId: vi.fn().mockResolvedValue('clinic-A'),
     loadChunks: vi.fn().mockResolvedValue([
       { id: 'c1', content: 'first chunk content' },
       { id: 'c2', content: 'second chunk content' },
@@ -80,5 +83,48 @@ describe('reindexDocumentHandler', () => {
     expect(deps.updateChunkEmbedding).not.toHaveBeenCalled();
     // markIndexed never reached
     expect(deps.markIndexed).not.toHaveBeenCalled();
+  });
+
+  // Issue #18: cross-tenant defense in depth. Sem caller atualmente, mas
+  // AI-3.5 (upload UI) vai disparar — precisa validar event.clinicId vs
+  // documents.clinic_id antes do loop de embeddings.
+
+  it('rejects with cross-tenant violation when document belongs to other clinic (#18)', async () => {
+    const deps = makeDeps({
+      loadDocumentClinicId: vi.fn().mockResolvedValue('clinic-OTHER'),
+    });
+    await expect(reindexDocumentHandler(baseEvent, fakeStep, deps)).rejects.toThrow(
+      /cross.tenant/i,
+    );
+    // Verify nem chunks nem embeddings foram tocados após guard fail.
+    expect(deps.loadChunks).not.toHaveBeenCalled();
+    expect(deps.generateEmbedding).not.toHaveBeenCalled();
+    expect(deps.markIndexed).not.toHaveBeenCalled();
+  });
+
+  it('rejects when document does not exist (loadDocumentClinicId retorna null) (#18)', async () => {
+    const deps = makeDeps({
+      loadDocumentClinicId: vi.fn().mockResolvedValue(null),
+    });
+    await expect(reindexDocumentHandler(baseEvent, fakeStep, deps)).rejects.toThrow(
+      /not found/i,
+    );
+    expect(deps.loadChunks).not.toHaveBeenCalled();
+  });
+
+  it('verifica clinic_id ANTES de loadChunks (ordem importa pra defense in depth) (#18)', async () => {
+    const callOrder: string[] = [];
+    const deps = makeDeps({
+      loadDocumentClinicId: vi.fn().mockImplementation(async () => {
+        callOrder.push('loadDocumentClinicId');
+        return 'clinic-A';
+      }),
+      loadChunks: vi.fn().mockImplementation(async () => {
+        callOrder.push('loadChunks');
+        return [];
+      }),
+    });
+    await reindexDocumentHandler(baseEvent, fakeStep, deps);
+    expect(callOrder).toEqual(['loadDocumentClinicId', 'loadChunks']);
   });
 });
