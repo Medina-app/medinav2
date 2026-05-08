@@ -45,8 +45,9 @@ export function buildCollectInfoTool(ctx: ToolContext) {
       }
 
       // Audit complementar (RPC não emite — paralelo ao pattern dos outros
-      // tools como escalate). Service_role insert direto.
-      await supabase.from('audit_logs').insert({
+      // tools como escalate). Service_role insert direto. CR review #2:
+      // propaga erro se insert falhar — silenciar derrota proposito do audit.
+      const { error: auditErr } = await supabase.from('audit_logs').insert({
         clinic_id: clinicId,
         user_id: null,
         action: 'agent.tool.collect_info',
@@ -54,6 +55,9 @@ export function buildCollectInfoTool(ctx: ToolContext) {
         resource_id: conversationId,
         metadata: { field, tool: 'collect_patient_info' },
       })
+      if (auditErr) {
+        throw new Error(`collect_info: audit_logs insert failed: ${auditErr.message}`)
+      }
 
       return { ok: true as const, field, instruction: INSTRUCTIONS[field] }
     },

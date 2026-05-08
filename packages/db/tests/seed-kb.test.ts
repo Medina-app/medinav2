@@ -39,13 +39,16 @@ function makeMockSupabase(state: MockState) {
           const statusCall = selectChain._eqCalls.find((c) => c.col === 'status');
           const hash = hashCall?.value;
           const wantStatus = statusCall?.value;
-          // existingHashes representa docs com status='indexed' (só esses
-          // são skipados na lógica idempotente pos-#17). Se chain pediu
-          // status='indexed', confere; outros statuses retornam null.
-          if (typeof hash === 'string' && state.existingHashes.has(hash)) {
-            if (wantStatus === undefined || wantStatus === 'indexed') {
-              return { data: { id: 'existing-doc' }, error: null };
-            }
+          // CR review fix: exige explicitamente wantStatus === 'indexed'.
+          // Mock NAO aceita absence do filtro (que era ambiguo na versao
+          // anterior). Se alguem remover .eq('status','indexed') do impl,
+          // testes idempotency falham — protege a invariante do #17.
+          if (
+            typeof hash === 'string' &&
+            wantStatus === 'indexed' &&
+            state.existingHashes.has(hash)
+          ) {
+            return { data: { id: 'existing-doc' }, error: null };
           }
           return { data: null, error: null };
         }),

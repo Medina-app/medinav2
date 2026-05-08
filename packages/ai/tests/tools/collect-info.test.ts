@@ -64,6 +64,17 @@ describe('collect_patient_info', () => {
     ).rejects.toThrow(/cross-tenant violation/)
   })
 
+  it('lanca quando audit_logs insert falha (CR review #2: nao silenciar)', async () => {
+    const mock = buildMockSupabase({
+      conversations: { single: { metadata: {}, clinic_id: 'clinic-A' } },
+      audit_logs: { insertError: { message: 'audit table down' } },
+    })
+    await expect(
+      asTool(buildCollectInfoTool(buildToolContext({ supabase: mock.supabase as never })))
+        .execute({ field: 'name' }),
+    ).rejects.toThrow(/audit_logs insert failed: audit table down/)
+  })
+
   it('returns instruction in Portuguese for the LLM (not preempting patient response)', async () => {
     const mock = buildMockSupabase({
       conversations: { single: { metadata: {}, clinic_id: 'clinic-A' } },

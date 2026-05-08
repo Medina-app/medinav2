@@ -4,6 +4,7 @@
     "lib": ["ES2022"],
     "moduleResolution": "bundler",
     "module": "esnext",
+    "noUncheckedIndexedAccess": true,
     "outDir": "./dist",
     "rootDir": "."
   },
