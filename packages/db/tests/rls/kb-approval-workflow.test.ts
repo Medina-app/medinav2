@@ -23,10 +23,13 @@ async function makeClinic(name: string): Promise<{ id: string }> {
 describe('AI-3.5b: knowledge_documents approval workflow', () => {
   it('1. coluna approval_status existe + default pending_approval em rows novas', async () => {
     const c = await makeClinic('Approval-Default');
-    const doc = await createTestKnowledgeDocument(sql, c.id);
-
-    const [row] = await sql<{ approval_status: string }[]>`
-      SELECT approval_status FROM knowledge_documents WHERE id = ${doc.id}
+    // INSERT direto SEM passar approval_status pra validar o DEFAULT do schema.
+    // Helper createTestKnowledgeDocument seta approved por default — útil pra
+    // outros testes mas inadequado pra validar default real da coluna.
+    const [row] = await sql<{ id: string; approval_status: string }[]>`
+      INSERT INTO knowledge_documents (clinic_id, title, source_type)
+      VALUES (${c.id}, ${'Approval-Default-Doc'}, 'manual')
+      RETURNING id, approval_status
     `;
     expect(row?.approval_status).toBe('pending_approval');
   });

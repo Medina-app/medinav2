@@ -30,3 +30,14 @@ export {
   type InngestSendFn,
   type InngestOutboundEvent,
 } from './outbox';
+export {
+  uploadKbDocument,
+  downloadKbDocument,
+  deleteKbDocument,
+  kbDocumentPath,
+  KB_UPLOADS_BUCKET,
+  type UploadKbDocumentArgs,
+  type UploadKbDocumentResult,
+  type DownloadKbDocumentArgs,
+  type DeleteKbDocumentArgs,
+} from './kb-storage';

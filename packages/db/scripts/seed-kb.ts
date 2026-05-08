@@ -22,6 +22,10 @@ import { fileURLToPath } from 'node:url';
 
 export const EMBEDDING_MODEL = 'text-embedding-3-small';
 export const CHUNK_CHAR_LIMIT = 500;
+// AI-3.5b nota: chunkMarkdown/approxTokens duplicados aqui e em
+// packages/ai/src/kb-chunking.ts (worker process-kb-document). Não causa
+// circular dep (db depende de ai? não — ai depende de db). Manter em sync
+// se o algoritmo evoluir; algoritmo está estável desde PR #16.
 
 export interface SeedSummary {
   documentsCreated: number;
