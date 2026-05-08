@@ -49,7 +49,9 @@ export const DEFAULT_BLOCKED_PATTERNS: Record<string, RegExp[]> = {
     // Severity probes: "isso é grave/sério/preocupante"
     /\bisso (e|é) (grave|s[eé]rio|s[eé]ria|preocupante)\b/i,
     // Direct disease ID question: "é câncer?", "é tumor?", "é infecção?"
-    /\b(e|é) (c[aâ]ncer|tumor|infec[cç][aã]o|infec[cç][oõ]es|av[ce]|infarto|enfarte)\b/i,
+    // Anchor com (?:^|\s) em vez de \b porque 'é' não é \w em regex JS (sem flag /u)
+    // — \bé não casa quando precedido por espaço/início; whitespace/start é robusto.
+    /(?:^|\s)(e|é) (c[aâ]ncer|tumor|infec[cç][aã]o|infec[cç][oõ]es|av[ce]|infarto|enfarte)\b/i,
   ],
   medication_request: [
     // "qual remédio devo tomar", "que medicamento posso tomar"
@@ -63,7 +65,8 @@ export const DEFAULT_BLOCKED_PATTERNS: Record<string, RegExp[]> = {
   ],
   diagnostic_advice: [
     // "é normal/anormal/preocupante" (questão clínica de avaliação)
-    /\b(e|é) (normal|anormal|preocupante)\?*/i,
+    // Mesmo motivo do anchor (?:^|\s): 'é' não é \w em regex JS sem flag /u.
+    /(?:^|\s)(e|é) (normal|anormal|preocupante)\b/i,
     // "vai melhorar/piorar"
     /\bvai (melhorar|piorar|sarar)\b/i,
     // "preciso ir no médico/hospital", "preciso me consultar"
