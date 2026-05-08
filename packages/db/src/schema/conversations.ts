@@ -40,6 +40,9 @@ export const conversations = pgTable(
     externalId: text('external_id').notNull(),
     state: text('state').$type<ConversationState>().notNull().default('ai_handling'),
     escalatedVia: text('escalated_via').$type<'ai' | 'manual' | null>(),
+    escalatedReason: text('escalated_reason').$type<
+      'medication' | 'diagnosis' | 'urgency' | 'symptom' | 'other' | null
+    >(),
     assignedUserId: uuid('assigned_user_id'),
     aiEnabled: boolean('ai_enabled').notNull().default(true),
     lastMessageAt: timestamp('last_message_at', { withTimezone: true }),
@@ -89,6 +92,13 @@ export const conversations = pgTable(
     check(
       'conversations_escalated_via_valid',
       sql`${t.escalatedVia} IS NULL OR ${t.escalatedVia} IN ('ai','manual')`,
+    ),
+    // AI-5: structured guardrail escalation category. NULL when escalation
+    // came via tool-call (LLM chose to escalate) — só populado por
+    // escalate_conversation_with_reason RPC (pre-filter / urgency / post-filter).
+    check(
+      'conversations_escalated_reason_valid',
+      sql`${t.escalatedReason} IS NULL OR ${t.escalatedReason} IN ('medication','diagnosis','urgency','symptom','other')`,
     ),
   ],
 );
