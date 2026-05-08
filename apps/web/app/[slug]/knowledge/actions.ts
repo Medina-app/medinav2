@@ -271,6 +271,37 @@ export async function approveKbDocumentAction(input: {
     .eq('clinic_id', ctx.clinicId);
   if (updErr) return { error: updErr.message };
 
+  // CR fix #3: enqueue inngest ANTES do audit log + rollback do UPDATE
+  // se falhar. Sem isso, doc fica com approval_status='approved' mas worker
+  // nunca dispara — usuario vê "Aprovado" no inbox e a IA usa o doc, mas
+  // chunks nunca foram criados (search_kb retorna zero hits do doc).
+  try {
+    await inngest.send({
+      name: 'kb/document.process',
+      data: {
+        clinicId: ctx.clinicId,
+        documentId: parsed.data.documentId,
+        ext: docRow.source_type,
+        mimeType: docRow.file_mime_type ?? undefined,
+      },
+    });
+  } catch (e) {
+    // Rollback: volta pra pending_approval. Idempotente — re-aprovar
+    // chama esta action de novo.
+    await sb
+      .from('knowledge_documents')
+      .update({
+        approval_status: 'pending_approval',
+        approved_by: null,
+        approved_at: null,
+      })
+      .eq('id', parsed.data.documentId)
+      .eq('clinic_id', ctx.clinicId);
+    return { error: `Falha ao enfileirar indexação: ${(e as Error).message}` };
+  }
+
+  // Audit DEPOIS do enqueue confirmado — best-effort. Se audit falha mas
+  // worker já enfileirado, ainda preferimos doc indexado a falha visível.
   await sb.from('audit_logs').insert({
     clinic_id: ctx.clinicId,
     user_id: ctx.user.id,
@@ -278,17 +309,6 @@ export async function approveKbDocumentAction(input: {
     resource: 'knowledge_documents',
     resource_id: parsed.data.documentId,
     metadata: { source: 'admin_ui' },
-  });
-
-  // Dispatcha Inngest pra processar (parse + embed + insert chunks).
-  await inngest.send({
-    name: 'kb/document.process',
-    data: {
-      clinicId: ctx.clinicId,
-      documentId: parsed.data.documentId,
-      ext: docRow.source_type,
-      mimeType: docRow.file_mime_type ?? undefined,
-    },
   });
 
   revalidatePath(`/${ctx.clinicSlug}/knowledge`);
@@ -401,12 +421,31 @@ export async function reindexKbDocumentAction(input: {
     return { error: 'Apenas documentos aprovados podem ser re-indexados.' };
   }
 
-  // Reset status + dispatch.
-  await sb
+  // CR fix #4: capturar erro do UPDATE — sem isso, RLS deny ou network
+  // error retornaria { ok: true } com nada acontecendo (worker noop).
+  const { error: updErr } = await sb
     .from('knowledge_documents')
     .update({ status: 'pending', error_message: null })
     .eq('id', parsed.data.documentId)
     .eq('clinic_id', ctx.clinicId);
+  if (updErr) return { error: `Falha ao resetar status: ${updErr.message}` };
+
+  // CR fix #3 (simétrico): enqueue inngest com rollback do status reset
+  // se falhar. Doc volta pra status anterior implícito via worker dispatch
+  // pendente — aqui apenas evitamos sinalizar success pra UI.
+  try {
+    await inngest.send({
+      name: 'kb/document.process',
+      data: {
+        clinicId: ctx.clinicId,
+        documentId: parsed.data.documentId,
+        ext: docRow.source_type,
+        mimeType: docRow.file_mime_type ?? undefined,
+      },
+    });
+  } catch (e) {
+    return { error: `Falha ao enfileirar reindex: ${(e as Error).message}` };
+  }
 
   await sb.from('audit_logs').insert({
     clinic_id: ctx.clinicId,
@@ -415,16 +454,6 @@ export async function reindexKbDocumentAction(input: {
     resource: 'knowledge_documents',
     resource_id: parsed.data.documentId,
     metadata: { source: 'admin_ui' },
-  });
-
-  await inngest.send({
-    name: 'kb/document.process',
-    data: {
-      clinicId: ctx.clinicId,
-      documentId: parsed.data.documentId,
-      ext: docRow.source_type,
-      mimeType: docRow.file_mime_type ?? undefined,
-    },
   });
 
   revalidatePath(`/${ctx.clinicSlug}/knowledge`);

@@ -266,6 +266,33 @@ describe('deleteKbDocumentAction', () => {
       });
       expect(result).toEqual({ error: 'Documento já está aprovado.' });
     });
+
+    it('CR fix #3: inngest.send falha → rollback approval + retorna erro', async () => {
+      const sb = buildSupabase({
+        document: {
+          clinic_id: 'clinic-1',
+          file_mime_type: 'text/markdown',
+          source_type: 'md',
+          approval_status: 'pending_approval',
+        },
+      });
+      mockGetSupabaseServerClient.mockReturnValue(sb.client);
+      mockInngestSend.mockRejectedValueOnce(new Error('inngest unreachable'));
+
+      const result = await approveKbDocumentAction({
+        documentId: '11111111-1111-1111-1111-111111111111',
+      });
+
+      expect(result).toEqual({ error: 'Falha ao enfileirar indexação: inngest unreachable' });
+      // 2 UPDATEs: 1º approved, 2º rollback pra pending_approval
+      expect(sb.updateCalls.length).toBe(2);
+      const rollback = sb.updateCalls[1]?.payload as {
+        approval_status: string;
+        approved_by: string | null;
+      };
+      expect(rollback.approval_status).toBe('pending_approval');
+      expect(rollback.approved_by).toBeNull();
+    });
   });
 
   describe('rejectKbDocumentAction', () => {
@@ -356,6 +383,26 @@ describe('deleteKbDocumentAction', () => {
         documentId: '11111111-1111-1111-1111-111111111111',
       });
       expect(result).toEqual({ error: 'Apenas documentos aprovados podem ser re-indexados.' });
+      expect(mockInngestSend).not.toHaveBeenCalled();
+    });
+
+    it('CR fix #4: UPDATE falha → retorna erro + NÃO dispatcha Inngest', async () => {
+      const sb = buildSupabase({
+        document: {
+          clinic_id: 'clinic-1',
+          file_mime_type: 'text/markdown',
+          source_type: 'md',
+          approval_status: 'approved',
+        },
+        updateError: 'connection terminated',
+      });
+      mockGetSupabaseServerClient.mockReturnValue(sb.client);
+
+      const result = await reindexKbDocumentAction({
+        documentId: '11111111-1111-1111-1111-111111111111',
+      });
+
+      expect(result).toEqual({ error: 'Falha ao resetar status: connection terminated' });
       expect(mockInngestSend).not.toHaveBeenCalled();
     });
   });

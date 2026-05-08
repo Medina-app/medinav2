@@ -60,6 +60,12 @@ describe('AI-3.5b: kb-uploads storage bucket + RLS', () => {
     expect(Number(bucket?.file_size_limit)).toBe(5 * 1024 * 1024);
     expect(bucket?.allowed_mime_types).toContain('text/markdown');
     expect(bucket?.allowed_mime_types).toContain('text/plain');
+    // CR fix #1 (0028): PDF + DOCX devem estar na allowlist — server action
+    // aceita esses formatos e quebraria sem o MIME correspondente no bucket.
+    expect(bucket?.allowed_mime_types).toContain('application/pdf');
+    expect(bucket?.allowed_mime_types).toContain(
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    );
   });
 
   it('2. admin/owner pode INSERT objeto em path da própria clinic', async () => {

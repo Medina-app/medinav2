@@ -146,7 +146,9 @@ export function KbDocumentList({ documents, canModerate }: KbDocumentListProps) 
                   {canModerate && doc.approvalStatus === 'approved' && (
                     <ReindexButton documentId={doc.id} />
                   )}
-                  <DeleteDocDialog documentId={doc.id} documentTitle={doc.title} />
+                  {canModerate && (
+                    <DeleteDocDialog documentId={doc.id} documentTitle={doc.title} />
+                  )}
                 </div>
               </TableCell>
             </TableRow>

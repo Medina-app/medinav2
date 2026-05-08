@@ -27,7 +27,10 @@ export function chunkMarkdown(content: string): string[] {
       chunks.push(p);
       continue;
     }
-    const sentences = p.match(/[^.!?]+[.!?]+/g) ?? [p];
+    // CR fix #5: alternativa `|[^.!?]+$` captura tail sem pontuação final
+    // (parágrafo solto sem ponto). Sem isso, último segmento era ignorado
+    // quando o texto não termina em .!?.
+    const sentences = p.match(/[^.!?]+[.!?]+|[^.!?]+$/g) ?? [p];
     let buf = '';
     for (const s of sentences) {
       if ((buf + s).length > CHUNK_CHAR_LIMIT && buf.length > 0) {
