@@ -28,6 +28,14 @@ export function buildEscalateTool(ctx: ToolContext) {
       // and state validation are enforced inside the function — caller just
       // reads the boolean (true = escalated, false = was already in
       // waiting_human) or propagates the RPC error.
+      //
+      // AI-5: tool-call escalation deliberately uses the 3-arg RPC and stores
+      // escalated_reason=NULL. Guardrail-driven escalation (pre-filter or
+      // urgency-detector hit) goes through the 4-arg
+      // escalate_conversation_with_reason RPC via the dispatcher with a
+      // structured category. Free-text LLM reason vs. structured guardrail
+      // category are distinct paths by design — LLM is creative, guardrails
+      // are an enum tied to UI badges + dashboard reporting.
       const { data, error } = await supabase.rpc('escalate_conversation', {
         p_conversation_id: conversationId,
         p_clinic_id: clinicId,
