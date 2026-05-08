@@ -20,7 +20,12 @@ const TOP_K = 3
 // cardiológica: R$ 350,00..."), so 0.7 produced 100% false negatives. 0.4
 // catches the long tail; mitigated by the system prompt instruction
 // "NUNCA invente informações que não estão no search_kb".
-const SIMILARITY_THRESHOLD = 0.4
+//
+// Issue #21: per-clinic via agent_configs.kb_similarity_threshold (migration
+// 0025). Esta constante é o fallback quando ctx.kbSimilarityThreshold é
+// undefined — back-compat com tests que constroem ctx mínimo + dispatchers
+// que ainda não plumam (não deveria ocorrer pós-PR-C, mas defesa).
+const DEFAULT_SIMILARITY_THRESHOLD = 0.4
 
 export function buildSearchKbTool(ctx: ToolContext) {
   return createTool({
@@ -31,6 +36,8 @@ export function buildSearchKbTool(ctx: ToolContext) {
     execute: async (inputData) => {
       const { query } = inputData as z.infer<typeof InputSchema>
       const { supabase, clinicId, conversationId, knowledgeDocumentIds } = ctx
+      // Issue #21: threshold per-clinic via ctx (DEFAULT em fallback).
+      const threshold = ctx.kbSimilarityThreshold ?? DEFAULT_SIMILARITY_THRESHOLD
 
       // Empty array means "all documents" (matches RPC `document_filter = null`).
       const docIds =
@@ -44,7 +51,7 @@ export function buildSearchKbTool(ctx: ToolContext) {
         supabase,
         documentIds: docIds,
         topK: TOP_K,
-        similarityThreshold: SIMILARITY_THRESHOLD,
+        similarityThreshold: threshold,
       })
 
       if (chunks.length === 0) {
@@ -57,7 +64,7 @@ export function buildSearchKbTool(ctx: ToolContext) {
           metadata: {
             query,
             top_k: TOP_K,
-            threshold: SIMILARITY_THRESHOLD,
+            threshold,
             found_count: 0,
             top_similarity: 0,
           },
@@ -96,7 +103,7 @@ export function buildSearchKbTool(ctx: ToolContext) {
         metadata: {
           query,
           top_k: TOP_K,
-          threshold: SIMILARITY_THRESHOLD,
+          threshold,
           found_count: chunks.length,
           top_similarity: topSimilarity,
         },

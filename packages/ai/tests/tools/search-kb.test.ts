@@ -230,4 +230,68 @@ describe('search_kb', () => {
     expect(tool.inputSchema.safeParse({ query: '' }).success).toBe(false)
     expect(tool.inputSchema.safeParse({ query: 'qual o horário?' }).success).toBe(true)
   })
+
+  // Issue #21: per-clinic similarity threshold via ctx.kbSimilarityThreshold.
+
+  it('usa ctx.kbSimilarityThreshold quando provido (#21)', async () => {
+    const { buildSearchKbTool } = await import('../../src/tools/search-kb.js')
+    // Linha c4 tem similarity=0.35; com threshold=0.3 ela passa, com 0.4 não.
+    const mock = buildMockSupabase(
+      { knowledge_documents: { inResult: DOC_TITLES } },
+      { data: SAMPLE_ROWS, error: null },
+    )
+    const tool = asTool(
+      buildSearchKbTool(
+        buildToolContext({
+          supabase: mock.supabase as never,
+          kbSimilarityThreshold: 0.3,
+        }),
+      ),
+    )
+
+    const result = await tool.execute({ query: 'q' })
+
+    if (!result.found) throw new Error('expected found=true')
+    // Com threshold 0.3, c4 (similarity=0.35) passa — total 4 chunks (TOP_K=3
+    // no RPC mas mock retorna 4 — rag.ts pode filtrar adicional). Assertion
+    // central: threshold do audit reflete o ctx, NÃO o constante 0.4.
+    const audit = mock.insertCalls.find((c) => c.table === 'audit_logs')
+    const meta = (audit!.payload as { metadata: Record<string, unknown> }).metadata
+    expect(meta['threshold']).toBe(0.3)
+  })
+
+  it('fallback pra DEFAULT 0.4 quando ctx.kbSimilarityThreshold undefined (#21)', async () => {
+    const { buildSearchKbTool } = await import('../../src/tools/search-kb.js')
+    const mock = buildMockSupabase(
+      { knowledge_documents: { inResult: DOC_TITLES } },
+      { data: [SAMPLE_ROWS[0]], error: null },
+    )
+    // ctx sem kbSimilarityThreshold (back-compat com tests antigos).
+    const tool = asTool(buildSearchKbTool(buildToolContext({ supabase: mock.supabase as never })))
+
+    await tool.execute({ query: 'q' })
+
+    const audit = mock.insertCalls.find((c) => c.table === 'audit_logs')
+    const meta = (audit!.payload as { metadata: Record<string, unknown> }).metadata
+    expect(meta['threshold']).toBe(0.4)
+  })
+
+  it('audit_logs.metadata.threshold reflete o threshold per-clinic (não constante hardcoded) (#21)', async () => {
+    const { buildSearchKbTool } = await import('../../src/tools/search-kb.js')
+    // Path miss: chunks=[] → audit logged com threshold do ctx.
+    const mock = buildMockSupabase({}, { data: [], error: null })
+    const tool = asTool(
+      buildSearchKbTool(
+        buildToolContext({
+          supabase: mock.supabase as never,
+          kbSimilarityThreshold: 0.65,
+        }),
+      ),
+    )
+    await tool.execute({ query: 'sem hit' })
+
+    const audit = mock.insertCalls.find((c) => c.table === 'audit_logs')
+    const meta = (audit!.payload as { metadata: Record<string, unknown> }).metadata
+    expect(meta['threshold']).toBe(0.65)
+  })
 })
