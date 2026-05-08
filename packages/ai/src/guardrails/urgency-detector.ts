@@ -17,6 +17,7 @@
  */
 
 import { mergeGuardrails } from './defaults.js'
+import { sanitizeEvidence } from './sanitize.js'
 import type { GuardrailsConfig, UrgencyResult } from './types.js'
 
 export type LlmClassify = (content: string) => Promise<{
@@ -63,7 +64,7 @@ export async function detectUrgency(
         return {
           level: 'critical',
           category,
-          evidence: m[0],
+          evidence: sanitizeEvidence(m[0]),
           source: 'regex',
         }
       }

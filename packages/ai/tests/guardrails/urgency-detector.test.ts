@@ -9,6 +9,14 @@ describe('AI-5: detectUrgency', () => {
     expect(r.category).toBe('suicide')
     expect(r.source).toBe('regex')
     expect(r.evidence).toMatch(/vou me matar/i)
+    expect(r.evidence?.length ?? 0).toBeLessThanOrEqual(80)
+  })
+
+  it('1a. evidence é sanitizada — dígitos mascarados', async () => {
+    const r = await detectUrgency('tomei 30 comprimidos de ansiolítico hoje', { config: {} })
+    expect(r.level).toBe('critical')
+    expect(r.category).toBe('suicide')
+    expect(r.evidence).not.toMatch(/\d/)
   })
 
   it('2. regex: detecta sangramento → critical/bleeding', async () => {

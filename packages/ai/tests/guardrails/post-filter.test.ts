@@ -76,4 +76,13 @@ describe('AI-5: validateOutput (post-filter)', () => {
     expect(r.valid).toBe(true)
     expect(r.violation).toBeUndefined()
   })
+
+  it('10. evidence sanitizada quando output viola — sem dígitos crus, max 80 chars', () => {
+    // Output prescritivo com dígitos (dosagem) — sanitize deve mascarar.
+    const r = validateOutput('Você pode tomar paracetamol 500mg de 6 em 6 horas pra a dor.', {})
+    expect(r.valid).toBe(false)
+    expect(r.violation?.evidence).toBeDefined()
+    expect(r.violation?.evidence).not.toMatch(/\d/)
+    expect((r.violation?.evidence ?? '').length).toBeLessThanOrEqual(80)
+  })
 })

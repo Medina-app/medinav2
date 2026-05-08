@@ -33,7 +33,8 @@ export type PreFilterMatch =
       category: string
       /** Mapped EscalatedReason for conversations.escalated_reason. */
       reason: EscalatedReason
-      /** The substring of the message that matched the regex. */
+      /** Sanitized substring (max 80 chars, dígitos mascarados) — segurança PII
+       *  pra logs/spans/audit. Ver sanitizeEvidence(). */
       evidence: string
     }
 

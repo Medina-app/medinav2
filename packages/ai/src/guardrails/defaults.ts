@@ -183,6 +183,27 @@ export function mergeGuardrails(config: GuardrailsConfig): MergedPatterns {
   }
 
   const compileOrThrow = (cat: string, source: string): RegExp => {
+    // ReDoS defense in depth (CodeRabbit Major): admin-provided patterns vêm
+    // de agent_configs.guardrails (jsonb editável por admin da clínica). Acesso
+    // já é restrito a roles autenticados, mas pattern malicioso ou mal-escrito
+    // pode causar catastrophic backtracking em runtime e travar dispatch.
+    //
+    // Mitigação:
+    //   - Hard length cap (200 chars): pattern legítimo PT-BR não passa disso.
+    //   - Heurística de nested quantifier: detecta forma clássica de ReDoS
+    //     `(a+)+`, `(a*)*`, `(a+){n}` etc. Não captura todos os casos mas
+    //     bloqueia os obviamente perigosos sem dependência externa.
+    //   - new RegExp já lança em sintaxe inválida (capturado abaixo).
+    if (source.length > 200) {
+      throw new Error(
+        `mergeGuardrails: regex em "${cat}" excede 200 chars (ReDoS defense)`,
+      )
+    }
+    if (/\([^)]*[*+][^)]*\)\s*[*+{]/.test(source)) {
+      throw new Error(
+        `mergeGuardrails: regex em "${cat}" tem quantifier aninhado (ReDoS risk): ${source.slice(0, 80)}`,
+      )
+    }
     try {
       return new RegExp(source, 'i')
     } catch (err) {

@@ -96,6 +96,39 @@ describe('AI-5: defaults + mergeGuardrails', () => {
     expect(() => mergeGuardrails(config)).toThrow(/regex/i)
   })
 
+  it('6a. ReDoS defense — pattern > 200 chars rejeitado', () => {
+    const longPattern = 'a'.repeat(201)
+    const config: GuardrailsConfig = {
+      additional_blocked_patterns: { abuse_long: [longPattern] },
+    }
+    expect(() => mergeGuardrails(config)).toThrow(/abuse_long/)
+    expect(() => mergeGuardrails(config)).toThrow(/200|ReDoS/i)
+  })
+
+  it('6b. ReDoS defense — quantifier aninhado rejeitado', () => {
+    // Padrões clássicos de catastrophic backtracking.
+    const dangerous = ['(a+)+', '(a*)*', '(.+)+', '(\\d*)+', '(ab+)*']
+    for (const p of dangerous) {
+      const config: GuardrailsConfig = {
+        additional_blocked_patterns: { abuse_nested: [p] },
+      }
+      expect(() => mergeGuardrails(config), `pattern=${p}`).toThrow(/aninhado|ReDoS/i)
+    }
+  })
+
+  it('6c. ReDoS defense — patterns válidos legítimos PT-BR continuam compilando', () => {
+    const config: GuardrailsConfig = {
+      additional_blocked_patterns: {
+        clinic_topic: [
+          '\\b(botox|preenchimento)\\b',
+          '\\bdescon[a-zçãõéêíóúâ]+gestion[a-zçãõéêíóúâ]+\\b',
+          '(?:^|\\s)(é|e) (uma )?(rinite|sinusite)\\b',
+        ],
+      },
+    }
+    expect(() => mergeGuardrails(config)).not.toThrow()
+  })
+
   it('7. defaults compilam com flag i (case-insensitive)', () => {
     // Seleção representativa em vez de iterar tudo.
     expect(DEFAULT_BLOCKED_PATTERNS['medication_request']?.[0]?.flags).toContain('i')

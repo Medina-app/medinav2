@@ -17,6 +17,7 @@
  */
 
 import { mergeGuardrails } from './defaults.js'
+import { sanitizeEvidence } from './sanitize.js'
 import type { GuardrailsConfig, OutputValidation } from './types.js'
 
 export function validateOutput(
@@ -28,7 +29,10 @@ export function validateOutput(
     for (const re of patterns) {
       const m = text.match(re)
       if (m) {
-        return { valid: false, violation: { category, evidence: m[0] } }
+        return {
+          valid: false,
+          violation: { category, evidence: sanitizeEvidence(m[0]) },
+        }
       }
     }
   }

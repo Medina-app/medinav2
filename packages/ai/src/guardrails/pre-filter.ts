@@ -15,6 +15,7 @@
  */
 
 import { mergeGuardrails } from './defaults.js'
+import { sanitizeEvidence } from './sanitize.js'
 import type { EscalatedReason, GuardrailsConfig, PreFilterMatch } from './types.js'
 
 /**
@@ -49,7 +50,7 @@ export function preFilterMessage(
           matched: true,
           category,
           reason: CATEGORY_TO_REASON[category] ?? 'other',
-          evidence: m[0],
+          evidence: sanitizeEvidence(m[0]),
         }
       }
     }

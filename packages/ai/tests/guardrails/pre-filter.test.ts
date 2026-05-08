@@ -9,7 +9,25 @@ describe('AI-5: preFilterMessage', () => {
     if (m.matched) {
       expect(m.category).toBe('medication_request')
       expect(m.reason).toBe('medication')
+      // Evidence sanitizada (max 80 chars, sem dígitos crus). Ainda contém o
+      // trecho semântico do match pra debug.
       expect(m.evidence).toMatch(/qual rem[eé]dio posso tomar/i)
+      expect(m.evidence.length).toBeLessThanOrEqual(80)
+    }
+  })
+
+  it('1a. evidence é sanitizada — dígitos mascarados, truncado em 80 chars', () => {
+    // Input com prescrição inline (paracetamol 500mg) — match em pattern
+    // de dosagem; deve sanitizar dígitos.
+    const m = preFilterMessage('o paciente pode tomar paracetamol 500 mg', {})
+    expect(m.matched).toBe(true)
+    if (m.matched) {
+      // Sanitização: dígitos viram #
+      expect(m.evidence).not.toMatch(/\d/)
+      // Cap 80 chars
+      expect(m.evidence.length).toBeLessThanOrEqual(80)
+      // Conteúdo semântico preservado (evidência continua útil pra debug).
+      expect(m.evidence.toLowerCase()).toContain('paracetamol')
     }
   })
 

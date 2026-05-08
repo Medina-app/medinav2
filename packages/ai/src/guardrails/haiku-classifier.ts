@@ -28,6 +28,18 @@ const SYSTEM_PROMPT = `Você é um classificador de urgência médica vital pra 
 
 Responda APENAS o JSON. Sem texto antes ou depois.`
 
+/** Whitelist de categorias aceitas do classifier. Mantém alinhada com o
+ *  SYSTEM_PROMPT acima — qualquer string fora desse set é descartada
+ *  silenciosamente (defense in depth contra LLM desobedecendo prompt). */
+const ALLOWED_CATEGORIES: ReadonlySet<string> = new Set([
+  'suicide',
+  'bleeding',
+  'cardiac',
+  'trauma',
+  'other_critical',
+  'none',
+])
+
 interface OpenRouterChoice {
   message?: { content?: string }
 }
@@ -89,9 +101,20 @@ export function createHaikuClassifier(opts: {
     if (level !== 'low' && level !== 'medium' && level !== 'critical') {
       throw new Error(`Haiku classifier returned invalid level: ${String(level)}`)
     }
+    // Whitelist category contra ALLOWED_CATEGORIES (CodeRabbit nitpick #4):
+    // LLM desobedecendo SYSTEM_PROMPT pode retornar qualquer string. Em vez
+    // de propagar valor não confiável pra UrgencyResult.category (que vai pra
+    // logs/spans/audit), descartamos silenciosamente. 'none' já era ignorado.
+    const rawCategory = parsed.category
+    const validCategory =
+      typeof rawCategory === 'string' &&
+      rawCategory !== 'none' &&
+      ALLOWED_CATEGORIES.has(rawCategory)
+        ? rawCategory
+        : undefined
     return {
       level,
-      ...(parsed.category && parsed.category !== 'none' ? { category: parsed.category } : {}),
+      ...(validCategory ? { category: validCategory } : {}),
     }
   }
 }
