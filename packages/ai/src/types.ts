@@ -1,5 +1,6 @@
 import type { Agent } from '@mastra/core/agent'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import type { GuardrailsConfig } from './guardrails/types.js'
 
 export interface AgentConfig {
   id: string
@@ -12,7 +13,9 @@ export interface AgentConfig {
   temperature: number
   maxTokens: number
   tools: string[]
-  guardrails: string[]
+  /** AI-5: per-clinic override of TS default guardrail patterns. Stored as
+   *  jsonb in agent_configs.guardrails. Empty `{}` means "use defaults". */
+  guardrails: GuardrailsConfig
   knowledgeDocumentIds: string[]
 }
 

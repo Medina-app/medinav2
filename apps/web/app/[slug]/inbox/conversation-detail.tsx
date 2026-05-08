@@ -82,7 +82,10 @@ export default function ConversationDetail({
   const headerName = conversation.patient?.fullName ?? conversation.externalId;
   const phone = conversation.patient?.phone ?? conversation.externalId;
   const stateLabel = STATE_LABEL[conversation.state] ?? conversation.state;
-  const escalationBadge = getEscalationBadgeProps(conversation.escalatedVia ?? null);
+  const escalationBadge = getEscalationBadgeProps(
+    conversation.escalatedVia ?? null,
+    conversation.escalatedReason ?? null,
+  );
 
   return (
     <div className="flex flex-col h-full">

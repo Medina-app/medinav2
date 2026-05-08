@@ -4,12 +4,24 @@ import { getLangfuseClient, withTrace, type LangfuseTrace } from './langfuse.js'
 import { AgentDispatchSkipped } from './errors.js'
 import { buildToolsFromConfig } from './tools/build.js'
 import type { ToolContext } from './types.js'
+import { preFilterMessage } from './guardrails/pre-filter.js'
+import { detectUrgency, type LlmClassify } from './guardrails/urgency-detector.js'
+import { validateOutput } from './guardrails/post-filter.js'
+import { escalateWithGuardrail } from './guardrails/escalate-with-guardrail.js'
+import { createHaikuClassifier } from './guardrails/haiku-classifier.js'
+import { sanitizeEvidence } from './guardrails/sanitize.js'
+import type { EscalatedReason, GuardrailsConfig } from './guardrails/types.js'
 
 const HISTORY_LIMIT = 20
 /** Cap the agent loop. AI-SDK default is 1 (single-shot), which would prevent
  *  the LLM from speaking after a tool call. 5 lets typical "tool→reply" flows
  *  finish (escalate→goodbye, business_hours→answer) without infinite loops. */
 const MAX_STEPS = 5
+
+/** AI-5: número máximo de regenerações pós-violação do post-filter.
+ *  Total de chamadas do LLM por dispatch = 1 inicial + até MAX_REGENERATIONS.
+ *  Após esgotar, dispatcher escala via guardrail com canned response. */
+const MAX_REGENERATIONS = 2
 
 export interface DispatchAgentArgs {
   conversationId: string
@@ -38,10 +50,46 @@ interface ChatMessage {
 interface ToolCallStep { payload?: { toolName?: string } }
 interface AgentStep { toolCalls?: ToolCallStep[] }
 
+/** AI-5: mapeia categoria do post-filter (que usa nomes da defaults) → EscalatedReason
+ *  estruturado pra escalate_conversation_with_reason. Mantém invariante: nenhum NULL,
+ *  fallback pra 'other' quando categoria custom da clínica. */
+function mapViolationCategoryToReason(category: string | undefined): EscalatedReason {
+  switch (category) {
+    case 'medication_request':
+      return 'medication'
+    case 'diagnosis_request':
+    case 'diagnostic_advice':
+      return 'diagnosis'
+    case 'symptom_interpretation':
+      return 'symptom'
+    default:
+      return 'other'
+  }
+}
+
+/** AI-5: opcionalmente instancia Haiku classifier pro urgency-detector camada 2.
+ *  Off quando OPENROUTER_API_KEY ausente (test env) ou
+ *  GUARDRAIL_HAIKU_FALLBACK='off' (kill switch). */
+function maybeHaikuClassifier(): LlmClassify | undefined {
+  if (process.env['GUARDRAIL_HAIKU_FALLBACK'] === 'off') return undefined
+  if (!process.env['OPENROUTER_API_KEY']) return undefined
+  try {
+    return createHaikuClassifier()
+  } catch {
+    return undefined
+  }
+}
+
 /**
  * Loads the conversation, the published agent_config, the last 20 messages,
  * generates a reply via the Mastra agent, and inserts the response into the
  * outbox (outbox_status='pending') for the CHAT-2 worker to send.
+ *
+ * AI-5 layered guardrails (in order):
+ *   1. Pre-filter (regex sobre user msg) — pula LLM, escala medication/diagnosis/etc.
+ *   2. Urgency detector (regex + Haiku fallback) — pula LLM, escala como urgency.
+ *      Critical sempre vence pre-filter.
+ *   3. Post-filter (regex sobre LLM output) — regenera até 2x; persiste violando → escala.
  *
  * Skips (throws AgentDispatchSkipped) when:
  *   - conversation.state !== 'ai_handling'
@@ -74,9 +122,10 @@ export async function dispatchAgent(args: DispatchAgentArgs): Promise<DispatchRe
   }
 
   // 2. Load the active published agent_config for this clinic + agentName.
+  // AI-5: SELECT inclui guardrails (jsonb) — defaults aplicam quando '{}'.
   const { data: cfg } = await supabase
     .from('agent_configs')
-    .select('id, system_prompt, model, temperature, max_tokens, name, tools, knowledge_document_ids')
+    .select('id, system_prompt, model, temperature, max_tokens, name, tools, guardrails, knowledge_document_ids')
     .eq('clinic_id', clinicId)
     .eq('status', 'published')
     .eq('name', agentName)
@@ -100,6 +149,11 @@ export async function dispatchAgent(args: DispatchAgentArgs): Promise<DispatchRe
       role: m.sender_type === 'patient' ? ('user' as const) : ('assistant' as const),
       content: m.content ?? '',
     }))
+
+  const guardrailsConfig: GuardrailsConfig =
+    (cfg as { guardrails?: GuardrailsConfig }).guardrails ?? {}
+  const lastUserContent =
+    messages.filter((m) => m.role === 'user').at(-1)?.content ?? ''
 
   // 4. Build tools bound to this dispatch context, then construct the agent.
   //    knowledge_document_ids is AI-3 wiring: search_kb reads it from ToolContext
@@ -133,6 +187,100 @@ export async function dispatchAgent(args: DispatchAgentArgs): Promise<DispatchRe
       },
     },
     async (trace: LangfuseTrace | null): Promise<DispatchResult> => {
+      const traceForGuardrail = trace as unknown as
+        | { span?: (a: Record<string, unknown>) => void }
+        | null
+
+      // ─── AI-5 LAYER 1+2: pre-filter + urgency in parallel (BEFORE LLM) ─────
+      // Aplicado sobre a última mensagem do paciente — a que disparou este
+      // dispatch. Critical de urgency vence pre-filter; ambos pulam o LLM.
+      if (lastUserContent.length > 0) {
+        const llmClassify = maybeHaikuClassifier()
+        const [preFilter, urgency] = await Promise.all([
+          Promise.resolve(preFilterMessage(lastUserContent, guardrailsConfig)),
+          detectUrgency(lastUserContent, {
+            config: guardrailsConfig,
+            llmFallbackEnabled: !!llmClassify,
+            ...(llmClassify ? { llmClassify } : {}),
+          }),
+        ])
+
+        // Span informacional pra urgency: emite quando NÃO é low (low é silencio
+        // total — caso comum). medium = haiku fallback; critical = escalation.
+        if (urgency.level !== 'low') {
+          try {
+            traceForGuardrail?.span?.({
+              name: `guardrail.urgency.${urgency.level}`,
+              input: {
+                category: urgency.category ?? null,
+                evidence: urgency.evidence ?? null,
+                source: urgency.source,
+              },
+            })
+          } catch {
+            /* swallow */
+          }
+        }
+
+        // Urgency critical vence pre-filter (risco vital tem prioridade absoluta).
+        if (urgency.level === 'critical') {
+          // Self-review M1: urgency.evidence ja vem sanitizado pelo
+          // urgency-detector quando source='regex'. Quando source='llm',
+          // evidence pode ser undefined — fallback usa sanitizeEvidence
+          // sobre o conteudo cru pra evitar PII vazar pra reasonText
+          // (que vai pra audit_logs.metadata.reason + system message
+          // visivel no inbox + Langfuse span).
+          const evidenceFallback = sanitizeEvidence(lastUserContent)
+          const reasonText = `urgency:${urgency.category ?? 'unknown'} — ${urgency.evidence ?? evidenceFallback}`
+          const { cannedMessageId } = await escalateWithGuardrail({
+            supabase,
+            clinicId,
+            conversationId,
+            agentConfigId: (cfg as { id: string }).id,
+            reasonCategory: 'urgency',
+            reasonText,
+            trace: traceForGuardrail,
+          })
+          return {
+            messageId: cannedMessageId,
+            traceId: trace?.id ?? null,
+            tokensIn: 0,
+            tokensOut: 0,
+          }
+        }
+
+        if (preFilter.matched) {
+          try {
+            traceForGuardrail?.span?.({
+              name: 'guardrail.pre_filter.match',
+              input: {
+                category: preFilter.category,
+                reason: preFilter.reason,
+                evidence: preFilter.evidence,
+              },
+            })
+          } catch {
+            /* swallow */
+          }
+          const reasonText = `${preFilter.category}: ${preFilter.evidence}`
+          const { cannedMessageId } = await escalateWithGuardrail({
+            supabase,
+            clinicId,
+            conversationId,
+            agentConfigId: (cfg as { id: string }).id,
+            reasonCategory: preFilter.reason,
+            reasonText,
+            trace: traceForGuardrail,
+          })
+          return {
+            messageId: cannedMessageId,
+            traceId: trace?.id ?? null,
+            tokensIn: 0,
+            tokensOut: 0,
+          }
+        }
+      }
+
       const generation = trace?.generation?.({
         name: 'agent.generate',
         model: cfg.model,
@@ -149,15 +297,17 @@ export async function dispatchAgent(args: DispatchAgentArgs): Promise<DispatchRe
       const tempNum = typeof cfg.temperature === 'string'
         ? parseFloat(cfg.temperature)
         : (cfg.temperature as number)
+      const generateOpts = {
+        maxSteps: MAX_STEPS,
+        modelSettings: {
+          temperature: tempNum,
+          maxOutputTokens: cfg.max_tokens,
+        },
+      }
+
       let result
       try {
-        result = await agent.generate(messages, {
-          maxSteps: MAX_STEPS,
-          modelSettings: {
-            temperature: tempNum,
-            maxOutputTokens: cfg.max_tokens,
-          },
-        })
+        result = await agent.generate(messages, generateOpts)
         try {
           generation?.end?.({
             output: (result as { text?: string }).text ?? '',
@@ -175,14 +325,76 @@ export async function dispatchAgent(args: DispatchAgentArgs): Promise<DispatchRe
         throw err
       }
 
-      const text = (result as { text?: string }).text ?? ''
-      const usage = (result as { totalUsage?: { inputTokens?: number; outputTokens?: number } })
+      let text = (result as { text?: string }).text ?? ''
+      let usage = (result as { totalUsage?: { inputTokens?: number; outputTokens?: number } })
         .totalUsage ?? {}
 
-      // 6. Detect escalation. If the LLM called escalate_to_human, the tool
-      //    already inserted a system message and flipped state. We still
-      //    insert the goodbye text if the LLM produced one — but skip the
-      //    insert when text is empty/whitespace.
+      // ─── AI-5 LAYER 3: post-filter on LLM output ────────────────────────────
+      // Roda só se LLM produziu texto (escalate via tool já bypassed text
+      // empty). Se inválido: regenera com correção (até MAX_REGENERATIONS).
+      // Persistente → escala via guardrail com canned response.
+      let regenerations = 0
+      while (text.trim().length > 0) {
+        const validation = validateOutput(text, guardrailsConfig)
+        if (validation.valid) break
+
+        try {
+          traceForGuardrail?.span?.({
+            name: 'guardrail.post_filter.violation',
+            input: {
+              category: validation.violation?.category ?? 'unknown',
+              evidence: validation.violation?.evidence ?? null,
+              attempt: regenerations + 1,
+            },
+          })
+        } catch {
+          /* swallow */
+        }
+
+        if (regenerations >= MAX_REGENERATIONS) {
+          // Esgotou retries — escala. Caller (Inngest) NÃO retry porque o
+          // estado da conversa já mudou pra waiting_human via RPC.
+          const reasonCategory = mapViolationCategoryToReason(validation.violation?.category)
+          const reasonText = `post_filter:${validation.violation?.category ?? 'unknown'}: ${validation.violation?.evidence ?? '<no evidence>'}`
+          const { cannedMessageId } = await escalateWithGuardrail({
+            supabase,
+            clinicId,
+            conversationId,
+            agentConfigId: (cfg as { id: string }).id,
+            reasonCategory,
+            reasonText,
+            trace: traceForGuardrail,
+          })
+          return {
+            messageId: cannedMessageId,
+            traceId: trace?.id ?? null,
+            tokensIn: usage.inputTokens ?? 0,
+            tokensOut: usage.outputTokens ?? 0,
+          }
+        }
+
+        regenerations++
+        // Regenera com correção: assistant + user message interna instruindo o
+        // LLM a reescrever sem violação. Mastra trata role='user' como mensagem
+        // do paciente; system message embedded é o melhor proxy via abstração
+        // atual.
+        const correction: ChatMessage = {
+          role: 'user',
+          content: `[SISTEMA-INTERNO] Sua resposta anterior violou a política da clínica (categoria: ${validation.violation?.category}). Reescreva como secretária — sem diagnóstico, sem indicar medicação. Se o paciente realmente precisa disso, NÃO tente responder; apenas avise que vai transferir pra atendente humano.`,
+        }
+        const result2 = await agent.generate(
+          [...messages, { role: 'assistant' as const, content: text }, correction],
+          generateOpts,
+        )
+        text = (result2 as { text?: string }).text ?? ''
+        usage =
+          (result2 as { totalUsage?: { inputTokens?: number; outputTokens?: number } })
+            .totalUsage ?? usage
+      }
+
+      // 6. Detect tool-call escalation (LLM chamou escalate_to_human). Tool já
+      //    inseriu system message + flipou state. Se LLM produziu goodbye text,
+      //    inserimos junto com o resto; se text vazio, skip insert.
       const steps = ((result as { steps?: AgentStep[] }).steps) ?? []
       const escalated = steps.some((s) =>
         (s.toolCalls ?? []).some((tc) => tc.payload?.toolName === 'escalate_to_human'),
