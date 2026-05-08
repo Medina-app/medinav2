@@ -128,10 +128,15 @@ function makeSupabase(rows: FakeRows = {}) {
     throw new Error(`unmocked table: ${table}`)
   })
 
+  // AI-5: rpc() mock pra escalate_conversation_with_reason. Default true
+  // (escalou). Tests podem override via spies.rpc.mockResolvedValueOnce.
+  const rpc = vi.fn().mockResolvedValue({ data: true, error: null })
+
   return {
-    sb: { from } as never,
+    sb: { from, rpc } as never,
     spies: {
       from,
+      rpc,
       agentSelect,
       agentEqClinic,
       historySelect,
@@ -492,5 +497,172 @@ describe('dispatchAgent', () => {
     expect(eqStatusCall).toHaveBeenCalledWith('status', 'published')
 
     expect(mockCreateAgent).toHaveBeenCalledWith(expect.objectContaining({ agentName: 'agente-triagem' }))
+  })
+
+  // ─── AI-5 guardrails integration ────────────────────────────────────────────
+
+  const guardrailHistory = (lastUserContent: string) => [
+    {
+      content: lastUserContent,
+      sender_type: 'patient' as const,
+      direction: 'inbound' as const,
+      created_at: '2026-05-08T10:00:00Z',
+    },
+  ]
+
+  it('AI-5: pre-filter match (medication) escala via with_reason e NÃO chama LLM', async () => {
+    const { sb, spies } = makeSupabase({
+      conversation: baseConv,
+      agentConfig: baseCfg,
+      history: guardrailHistory('qual remédio posso tomar pra dor de cabeça?'),
+    })
+    const { dispatchAgent } = await import('../src/dispatcher.js')
+    await dispatchAgent({ conversationId: 'conv-1', clinicId: 'clinic-A', messageId: 'm', supabase: sb })
+
+    expect(mockGenerate).not.toHaveBeenCalled()
+    expect(spies.rpc).toHaveBeenCalledWith(
+      'escalate_conversation_with_reason',
+      expect.objectContaining({
+        p_conversation_id: 'conv-1',
+        p_clinic_id: 'clinic-A',
+        p_reason_category: 'medication',
+      }),
+    )
+    // Canned message inserida no outbox.
+    expect(spies.insertedMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sender_type: 'ai',
+        outbox_status: 'pending',
+        content: expect.stringMatching(/atendente|consulta/i),
+      }),
+    )
+  })
+
+  it('AI-5: urgency critical escala como urgency e canned response inclui CVV 188 / SAMU 192', async () => {
+    const { sb, spies } = makeSupabase({
+      conversation: baseConv,
+      agentConfig: baseCfg,
+      history: guardrailHistory('vou me matar, não aguento mais'),
+    })
+    const { dispatchAgent } = await import('../src/dispatcher.js')
+    await dispatchAgent({ conversationId: 'conv-1', clinicId: 'clinic-A', messageId: 'm', supabase: sb })
+
+    expect(mockGenerate).not.toHaveBeenCalled()
+    expect(spies.rpc).toHaveBeenCalledWith(
+      'escalate_conversation_with_reason',
+      expect.objectContaining({ p_reason_category: 'urgency' }),
+    )
+    // Canned response com 188 + 192.
+    const insertCall = spies.insertedMessage.mock.calls[0]?.[0] as { content?: string }
+    expect(insertCall.content).toContain('188')
+    expect(insertCall.content).toContain('192')
+  })
+
+  it('AI-5: urgency critical vence pre-filter quando mensagem dispara ambos', async () => {
+    // Adiciona pattern urgent custom que matcha "remédio" (pra simular caso
+    // onde mensagem cobra ambos pre-filter medication E urgency clinic-specific).
+    const cfgWithUrgent = {
+      ...baseCfg,
+      guardrails: {
+        additional_urgent_patterns: { clinic_emergency: ['\\brem[eé]dio\\b'] },
+      },
+    }
+    const { sb, spies } = makeSupabase({
+      conversation: baseConv,
+      agentConfig: cfgWithUrgent,
+      history: guardrailHistory('qual remédio posso tomar agora?'),
+    })
+    const { dispatchAgent } = await import('../src/dispatcher.js')
+    await dispatchAgent({ conversationId: 'conv-1', clinicId: 'clinic-A', messageId: 'm', supabase: sb })
+
+    // Urgency vence — escala como 'urgency', NÃO 'medication'.
+    expect(spies.rpc).toHaveBeenCalledWith(
+      'escalate_conversation_with_reason',
+      expect.objectContaining({ p_reason_category: 'urgency' }),
+    )
+  })
+
+  it('AI-5: post-filter regenera 2x e escala se output continua violando', async () => {
+    // Mock: 3 generations consecutivas com violation (medication recommendation).
+    mockGenerate
+      .mockResolvedValueOnce({
+        text: 'Você pode tomar paracetamol 500mg de 6 em 6 horas.',
+        totalUsage: { inputTokens: 50, outputTokens: 12 },
+        steps: [],
+      } as never)
+      .mockResolvedValueOnce({
+        text: 'Recomendo dipirona pra dor.',
+        totalUsage: { inputTokens: 60, outputTokens: 6 },
+        steps: [],
+      } as never)
+      .mockResolvedValueOnce({
+        text: 'Você deve tomar ibuprofeno 400mg.',
+        totalUsage: { inputTokens: 70, outputTokens: 7 },
+        steps: [],
+      } as never)
+
+    const { sb, spies } = makeSupabase({
+      conversation: baseConv,
+      agentConfig: baseCfg,
+      history: guardrailHistory('tô com dor de cabeça'),
+    })
+    const { dispatchAgent } = await import('../src/dispatcher.js')
+    await dispatchAgent({ conversationId: 'conv-1', clinicId: 'clinic-A', messageId: 'm', supabase: sb })
+
+    // 3 calls: initial + 2 regenerations.
+    expect(mockGenerate).toHaveBeenCalledTimes(3)
+    // Após 3a violação consecutiva → escala medication.
+    expect(spies.rpc).toHaveBeenCalledWith(
+      'escalate_conversation_with_reason',
+      expect.objectContaining({ p_reason_category: 'medication' }),
+    )
+  })
+
+  it('AI-5: post-filter regenera 1x com sucesso, insere output válido', async () => {
+    // Generation 1: invalid (recomenda remédio). Generation 2 (regen): válido.
+    mockGenerate
+      .mockResolvedValueOnce({
+        text: 'Você pode tomar paracetamol agora.',
+        totalUsage: { inputTokens: 50, outputTokens: 8 },
+        steps: [],
+      } as never)
+      .mockResolvedValueOnce({
+        text: 'Posso te ajudar a marcar uma consulta com o(a) médico(a)?',
+        totalUsage: { inputTokens: 80, outputTokens: 14 },
+        steps: [],
+      } as never)
+
+    const { sb, spies } = makeSupabase({
+      conversation: baseConv,
+      agentConfig: baseCfg,
+      history: guardrailHistory('tô com dor de cabeça'),
+    })
+    const { dispatchAgent } = await import('../src/dispatcher.js')
+    await dispatchAgent({ conversationId: 'conv-1', clinicId: 'clinic-A', messageId: 'm', supabase: sb })
+
+    // 1 call inicial + 1 regen = 2 total.
+    expect(mockGenerate).toHaveBeenCalledTimes(2)
+    // Sem RPC de escalation.
+    expect(spies.rpc).not.toHaveBeenCalled()
+    // Insere output válido (segundo).
+    expect(spies.insertedMessage).toHaveBeenCalledWith(
+      expect.objectContaining({
+        content: 'Posso te ajudar a marcar uma consulta com o(a) médico(a)?',
+      }),
+    )
+  })
+
+  it('AI-5: mensagem benigna passa por todas as 3 camadas sem disparar guardrail', async () => {
+    const { sb, spies } = makeSupabase({
+      conversation: baseConv,
+      agentConfig: baseCfg,
+      history: guardrailHistory('oi, gostaria de marcar uma consulta com o clínico'),
+    })
+    const { dispatchAgent } = await import('../src/dispatcher.js')
+    await dispatchAgent({ conversationId: 'conv-1', clinicId: 'clinic-A', messageId: 'm', supabase: sb })
+
+    expect(mockGenerate).toHaveBeenCalledTimes(1) // só 1 chamada, sem regen
+    expect(spies.rpc).not.toHaveBeenCalled() // sem escalation
+    expect(spies.insertedMessage).toHaveBeenCalled() // mas inseriu resposta normal
   })
 })
