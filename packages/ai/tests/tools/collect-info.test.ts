@@ -32,39 +32,36 @@ describe('collect_patient_info', () => {
     expect(tool.inputSchema.safeParse({ field: 'name' }).success).toBe(true)
   })
 
-  it('marks conversation.metadata.collected_info[field] with ISO timestamp', async () => {
+  it('chama RPC collect_info_atomic com args corretos (#12 atomic refactor)', async () => {
     const mock = buildMockSupabase({
       conversations: { single: { metadata: {}, clinic_id: 'clinic-A' } },
     })
     await asTool(buildCollectInfoTool(buildToolContext({ supabase: mock.supabase as never })))
       .execute({ field: 'name' })
 
-    const update = mock.updateCalls.find((c) => c.table === 'conversations')
-    expect(update).toBeDefined()
-    const md = (update!.payload as { metadata: { collected_info: Record<string, string> } }).metadata
-    expect(md.collected_info).toBeDefined()
-    expect(md.collected_info.name).toMatch(/^\d{4}-\d{2}-\d{2}T/)
+    // Tool agora delega read-modify-write pra RPC (nao mais update direto).
+    expect(mock.rpc).toHaveBeenCalledWith(
+      'collect_info_atomic',
+      expect.objectContaining({
+        p_conversation_id: 'conv-1',
+        p_clinic_id: 'clinic-A',
+        p_field: 'name',
+      }),
+    )
+    // p_value é ISO timestamp gerado no momento da chamada.
+    const rpcArgs = mock.rpc.mock.calls[0]?.[1] as { p_value: string }
+    expect(rpcArgs.p_value).toMatch(/^\d{4}-\d{2}-\d{2}T/)
   })
 
-  it('preserves existing metadata when adding collected_info', async () => {
-    const mock = buildMockSupabase({
-      conversations: {
-        single: {
-          metadata: { existing_key: 'preserve_me', collected_info: { reason: '2026-01-01T00:00:00Z' } },
-          clinic_id: 'clinic-A',
-        },
-      },
-    })
-    await asTool(buildCollectInfoTool(buildToolContext({ supabase: mock.supabase as never })))
-      .execute({ field: 'name' })
-
-    const update = mock.updateCalls.find((c) => c.table === 'conversations')
-    const md = (update!.payload as {
-      metadata: { existing_key: string; collected_info: Record<string, string> }
-    }).metadata
-    expect(md.existing_key).toBe('preserve_me')
-    expect(md.collected_info.reason).toBe('2026-01-01T00:00:00Z')
-    expect(md.collected_info.name).toMatch(/^\d{4}-\d{2}-\d{2}T/)
+  it('lanca quando RPC retorna error (cross-tenant ou conversa nao encontrada)', async () => {
+    const mock = buildMockSupabase(
+      { conversations: { single: { metadata: {}, clinic_id: 'clinic-A' } } },
+      { data: null, error: { message: 'cross-tenant violation' } },
+    )
+    await expect(
+      asTool(buildCollectInfoTool(buildToolContext({ supabase: mock.supabase as never })))
+        .execute({ field: 'name' }),
+    ).rejects.toThrow(/cross-tenant violation/)
   })
 
   it('returns instruction in Portuguese for the LLM (not preempting patient response)', async () => {
