@@ -9,6 +9,7 @@ import { detectUrgency, type LlmClassify } from './guardrails/urgency-detector.j
 import { validateOutput } from './guardrails/post-filter.js'
 import { escalateWithGuardrail } from './guardrails/escalate-with-guardrail.js'
 import { createHaikuClassifier } from './guardrails/haiku-classifier.js'
+import { sanitizeEvidence } from './guardrails/sanitize.js'
 import type { EscalatedReason, GuardrailsConfig } from './guardrails/types.js'
 
 const HISTORY_LIMIT = 20
@@ -223,7 +224,14 @@ export async function dispatchAgent(args: DispatchAgentArgs): Promise<DispatchRe
 
         // Urgency critical vence pre-filter (risco vital tem prioridade absoluta).
         if (urgency.level === 'critical') {
-          const reasonText = `urgency:${urgency.category ?? 'unknown'} — ${urgency.evidence ?? lastUserContent.slice(0, 60)}`
+          // Self-review M1: urgency.evidence ja vem sanitizado pelo
+          // urgency-detector quando source='regex'. Quando source='llm',
+          // evidence pode ser undefined — fallback usa sanitizeEvidence
+          // sobre o conteudo cru pra evitar PII vazar pra reasonText
+          // (que vai pra audit_logs.metadata.reason + system message
+          // visivel no inbox + Langfuse span).
+          const evidenceFallback = sanitizeEvidence(lastUserContent)
+          const reasonText = `urgency:${urgency.category ?? 'unknown'} — ${urgency.evidence ?? evidenceFallback}`
           const { cannedMessageId } = await escalateWithGuardrail({
             supabase,
             clinicId,
