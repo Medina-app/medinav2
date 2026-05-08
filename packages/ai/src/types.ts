@@ -17,6 +17,10 @@ export interface AgentConfig {
    *  jsonb in agent_configs.guardrails. Empty `{}` means "use defaults". */
   guardrails: GuardrailsConfig
   knowledgeDocumentIds: string[]
+  /** Issue #21: per-clinic search_kb similarity threshold [0, 1]. PostgREST
+   *  serializes NUMERIC como string ("0.40"); factory parser converte pra
+   *  number antes de propagar pra ToolContext. */
+  kbSimilarityThreshold: number
 }
 
 export interface RetrievedChunk {
@@ -40,6 +44,9 @@ export interface ToolContext {
    *  means "search all KB documents for this clinic" — search_kb tool converts
    *  empty to undefined so retrieveKnowledge passes null to the RPC. */
   knowledgeDocumentIds?: readonly string[]
+  /** Issue #21: per-clinic search_kb similarity threshold [0, 1]. Undefined
+   *  cai pro DEFAULT_THRESHOLD_FALLBACK em search-kb.ts (back-compat). */
+  kbSimilarityThreshold?: number
   supabase: SupabaseClient
 }
 
