@@ -28,19 +28,23 @@ import { deleteKbDocumentAction } from './actions';
  */
 function buildSupabase(opts: {
   document?: { clinic_id: string } | null;
+  selectError?: string;
   deleteError?: string;
   auditError?: string;
 }) {
   const maybeSingle = vi.fn().mockResolvedValue({
-    data: opts.document ?? null,
-    error: null,
+    data: opts.selectError ? null : opts.document ?? null,
+    error: opts.selectError ? { message: opts.selectError } : null,
   });
   const eqSelect = vi.fn().mockReturnValue({ maybeSingle });
   const select = vi.fn().mockReturnValue({ eq: eqSelect });
 
-  const eqDelete = vi.fn().mockResolvedValue({
+  // CR review #3: DELETE chain é .delete().eq('id', X).eq('clinic_id', Y)
+  // — primeira eq() retorna proxy que aceita segunda eq() final.
+  const eqDeleteFinal = vi.fn().mockResolvedValue({
     error: opts.deleteError ? { message: opts.deleteError } : null,
   });
+  const eqDelete = vi.fn().mockReturnValue({ eq: eqDeleteFinal });
   const deleteFn = vi.fn().mockReturnValue({ eq: eqDelete });
 
   const insertCalls: Array<{ table: string; payload: unknown }> = [];
@@ -57,7 +61,13 @@ function buildSupabase(opts: {
     throw new Error(`unmocked table ${table}`);
   });
 
-  return { client: { from } as unknown, fromMock: from, eqDelete, insertCalls };
+  return {
+    client: { from } as unknown,
+    fromMock: from,
+    eqDelete,
+    eqDeleteFinal,
+    insertCalls,
+  };
 }
 
 beforeEach(() => {
@@ -105,7 +115,9 @@ describe('deleteKbDocumentAction', () => {
     });
 
     expect(result).toEqual({ ok: true });
+    // Primeiro eq() filtra por id; segundo eq() filtra por clinic_id (TOCTOU defense).
     expect(sb.eqDelete).toHaveBeenCalledWith('id', '11111111-1111-1111-1111-111111111111');
+    expect(sb.eqDeleteFinal).toHaveBeenCalledWith('clinic_id', 'clinic-1');
   });
 
   it('audita action=admin.kb.delete com clinic_id + documentId', async () => {
@@ -139,6 +151,19 @@ describe('deleteKbDocumentAction', () => {
     expect(result).toEqual({
       error: 'permission denied for table knowledge_documents',
     });
+  });
+
+  it('SELECT error retorna "Falha ao validar documento" (não masca como not-found) (CR review #2)', async () => {
+    const sb = buildSupabase({
+      selectError: 'connection refused',
+    });
+    mockGetSupabaseServerClient.mockReturnValue(sb.client);
+
+    const result = await deleteKbDocumentAction({
+      documentId: '11111111-1111-1111-1111-111111111111',
+    });
+    expect(result).toEqual({ error: 'Falha ao validar documento.' });
+    expect(sb.eqDelete).not.toHaveBeenCalled();
   });
 
   it('audit failure NÃO bloqueia delete (best-effort) mas emite console.warn', async () => {

@@ -35,20 +35,29 @@ export async function deleteKbDocumentAction(input: {
   const sb = await getSupabaseServerClient();
 
   // Cross-tenant guard antes de DELETE.
-  const { data: doc } = await sb
+  // CR review #2: distingue erro de SELECT (RLS/rede/config) de "não
+  // encontrado" — masca operational error como not-found dificulta debug.
+  const { data: doc, error: docErr } = await sb
     .from('knowledge_documents')
     .select('clinic_id')
     .eq('id', parsed.data.documentId)
     .maybeSingle();
 
+  if (docErr) return { error: 'Falha ao validar documento.' };
+
   if (!doc || (doc as { clinic_id: string }).clinic_id !== ctx.clinicId) {
     return { error: 'Documento não encontrado.' };
   }
 
+  // CR review #3: TOCTOU defense — DELETE filtrado também por clinic_id.
+  // Caso entre o SELECT acima e este DELETE alguma transação alterar
+  // ownership do row, defense in depth garante que admin clinic-A não
+  // pode acidentalmente apagar doc clinic-B mesmo sob race.
   const { error: delErr } = await sb
     .from('knowledge_documents')
     .delete()
-    .eq('id', parsed.data.documentId);
+    .eq('id', parsed.data.documentId)
+    .eq('clinic_id', ctx.clinicId);
 
   if (delErr) return { error: delErr.message };
 

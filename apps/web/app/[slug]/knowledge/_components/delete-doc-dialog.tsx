@@ -31,13 +31,19 @@ export function DeleteDocDialog({ documentId, documentTitle }: DeleteDocDialogPr
 
   function handleConfirm() {
     startTransition(async () => {
-      const result = await deleteKbDocumentAction({ documentId });
-      if ('error' in result) {
-        toast.error(`Falha ao excluir: ${result.error}`);
-        return;
+      try {
+        const result = await deleteKbDocumentAction({ documentId });
+        if ('error' in result) {
+          toast.error(`Falha ao excluir: ${result.error}`);
+          return;
+        }
+        toast.success('Documento excluído.');
+        setOpen(false);
+      } catch {
+        // CR review #1: catch exceptions inesperadas (rede, action throw)
+        // pra evitar erro não tratado sem feedback ao usuário.
+        toast.error('Falha inesperada ao excluir documento.');
       }
-      toast.success('Documento excluído.');
-      setOpen(false);
     });
   }
 

@@ -78,7 +78,9 @@ export function KbDocumentList({ documents }: KbDocumentListProps) {
           <TableHead className="text-[12px] font-medium text-[var(--luma-text-secondary)] text-right">
             Adicionado
           </TableHead>
-          <TableHead className="text-right" />
+          <TableHead className="text-right">
+            <span className="sr-only">Ações</span>
+          </TableHead>
         </TableRow>
       </TableHeader>
       <TableBody>
