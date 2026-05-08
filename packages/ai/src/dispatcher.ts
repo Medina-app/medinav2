@@ -123,9 +123,11 @@ export async function dispatchAgent(args: DispatchAgentArgs): Promise<DispatchRe
 
   // 2. Load the active published agent_config for this clinic + agentName.
   // AI-5: SELECT inclui guardrails (jsonb) — defaults aplicam quando '{}'.
+  // Issue #21: SELECT inclui kb_similarity_threshold (numeric) — search_kb
+  // tool consome via ToolContext.
   const { data: cfg } = await supabase
     .from('agent_configs')
-    .select('id, system_prompt, model, temperature, max_tokens, name, tools, guardrails, knowledge_document_ids')
+    .select('id, system_prompt, model, temperature, max_tokens, name, tools, guardrails, knowledge_document_ids, kb_similarity_threshold')
     .eq('clinic_id', clinicId)
     .eq('status', 'published')
     .eq('name', agentName)
@@ -162,7 +164,24 @@ export async function dispatchAgent(args: DispatchAgentArgs): Promise<DispatchRe
   const toolNames = (cfg.tools as string[] | null) ?? []
   const knowledgeDocumentIds =
     ((cfg as { knowledge_document_ids?: string[] | null }).knowledge_document_ids ?? []) as readonly string[]
-  const toolCtx: ToolContext = { clinicId, conversationId, supabase, knowledgeDocumentIds }
+  // Issue #21: PostgREST serializa NUMERIC como string ("0.40"); parseFloat
+  // pra propagar pra ToolContext. Fallback 0.4 (mesmo DB default) cobre rows
+  // legacy pre-migration 0025.
+  const rawThreshold = (cfg as { kb_similarity_threshold?: string | number | null })
+    .kb_similarity_threshold
+  const kbSimilarityThreshold =
+    rawThreshold == null
+      ? 0.4
+      : typeof rawThreshold === 'number'
+        ? rawThreshold
+        : parseFloat(rawThreshold)
+  const toolCtx: ToolContext = {
+    clinicId,
+    conversationId,
+    supabase,
+    knowledgeDocumentIds,
+    kbSimilarityThreshold,
+  }
   const tools = buildToolsFromConfig(toolCtx, toolNames)
   const { agent } = await createAgent({ clinicId, agentName, supabase, tools })
 
