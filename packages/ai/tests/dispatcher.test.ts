@@ -51,6 +51,7 @@ const mockTrace = {
   update: vi.fn(),
   generation: vi.fn().mockReturnValue({ end: vi.fn() }),
   score: vi.fn(),
+  span: vi.fn(),
 }
 const mockLangfuseClient = {
   trace: vi.fn().mockReturnValue(mockTrace),
@@ -536,6 +537,10 @@ describe('dispatchAgent', () => {
         content: expect.stringMatching(/atendente|consulta/i),
       }),
     )
+    // Langfuse spans: pre_filter.match + guardrail.escalate.
+    const spanNames = mockTrace.span.mock.calls.map((c: unknown[]) => (c[0] as { name?: string }).name)
+    expect(spanNames).toContain('guardrail.pre_filter.match')
+    expect(spanNames).toContain('guardrail.escalate')
   })
 
   it('AI-5: urgency critical escala como urgency e canned response inclui CVV 188 / SAMU 192', async () => {
@@ -556,6 +561,10 @@ describe('dispatchAgent', () => {
     const insertCall = spies.insertedMessage.mock.calls[0]?.[0] as { content?: string }
     expect(insertCall.content).toContain('188')
     expect(insertCall.content).toContain('192')
+    // Spans: urgency.critical + escalate.
+    const spanNames = mockTrace.span.mock.calls.map((c: unknown[]) => (c[0] as { name?: string }).name)
+    expect(spanNames).toContain('guardrail.urgency.critical')
+    expect(spanNames).toContain('guardrail.escalate')
   })
 
   it('AI-5: urgency critical vence pre-filter quando mensagem dispara ambos', async () => {
@@ -616,6 +625,11 @@ describe('dispatchAgent', () => {
       'escalate_conversation_with_reason',
       expect.objectContaining({ p_reason_category: 'medication' }),
     )
+    // 3 spans de violation (1 por output inválido) + 1 escalate.
+    const spanNames = mockTrace.span.mock.calls.map((c: unknown[]) => (c[0] as { name?: string }).name)
+    const violationCount = spanNames.filter((n: string | undefined) => n === 'guardrail.post_filter.violation').length
+    expect(violationCount).toBe(3)
+    expect(spanNames).toContain('guardrail.escalate')
   })
 
   it('AI-5: post-filter regenera 1x com sucesso, insere output válido', async () => {

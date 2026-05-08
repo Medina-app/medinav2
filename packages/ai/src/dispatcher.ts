@@ -149,52 +149,10 @@ export async function dispatchAgent(args: DispatchAgentArgs): Promise<DispatchRe
       content: m.content ?? '',
     }))
 
-  // ─── AI-5 LAYER 1+2: pre-filter + urgency in parallel (BEFORE LLM) ──────────
-  // Aplicado sobre a última mensagem do paciente — a que disparou este
-  // dispatch. Critical de urgency vence pre-filter; ambos pulam o LLM.
   const guardrailsConfig: GuardrailsConfig =
     (cfg as { guardrails?: GuardrailsConfig }).guardrails ?? {}
   const lastUserContent =
     messages.filter((m) => m.role === 'user').at(-1)?.content ?? ''
-
-  if (lastUserContent.length > 0) {
-    const llmClassify = maybeHaikuClassifier()
-    const [preFilter, urgency] = await Promise.all([
-      Promise.resolve(preFilterMessage(lastUserContent, guardrailsConfig)),
-      detectUrgency(lastUserContent, {
-        config: guardrailsConfig,
-        llmFallbackEnabled: !!llmClassify,
-        ...(llmClassify ? { llmClassify } : {}),
-      }),
-    ])
-
-    // Urgency critical vence pre-filter (risco vital tem prioridade absoluta).
-    if (urgency.level === 'critical') {
-      const reasonText = `urgency:${urgency.category ?? 'unknown'} — ${urgency.evidence ?? lastUserContent.slice(0, 60)}`
-      const { cannedMessageId } = await escalateWithGuardrail({
-        supabase,
-        clinicId,
-        conversationId,
-        agentConfigId: (cfg as { id: string }).id,
-        reasonCategory: 'urgency',
-        reasonText,
-      })
-      return { messageId: cannedMessageId, traceId: null, tokensIn: 0, tokensOut: 0 }
-    }
-
-    if (preFilter.matched) {
-      const reasonText = `${preFilter.category}: ${preFilter.evidence}`
-      const { cannedMessageId } = await escalateWithGuardrail({
-        supabase,
-        clinicId,
-        conversationId,
-        agentConfigId: (cfg as { id: string }).id,
-        reasonCategory: preFilter.reason,
-        reasonText,
-      })
-      return { messageId: cannedMessageId, traceId: null, tokensIn: 0, tokensOut: 0 }
-    }
-  }
 
   // 4. Build tools bound to this dispatch context, then construct the agent.
   //    knowledge_document_ids is AI-3 wiring: search_kb reads it from ToolContext
@@ -228,6 +186,93 @@ export async function dispatchAgent(args: DispatchAgentArgs): Promise<DispatchRe
       },
     },
     async (trace: LangfuseTrace | null): Promise<DispatchResult> => {
+      const traceForGuardrail = trace as unknown as
+        | { span?: (a: Record<string, unknown>) => void }
+        | null
+
+      // ─── AI-5 LAYER 1+2: pre-filter + urgency in parallel (BEFORE LLM) ─────
+      // Aplicado sobre a última mensagem do paciente — a que disparou este
+      // dispatch. Critical de urgency vence pre-filter; ambos pulam o LLM.
+      if (lastUserContent.length > 0) {
+        const llmClassify = maybeHaikuClassifier()
+        const [preFilter, urgency] = await Promise.all([
+          Promise.resolve(preFilterMessage(lastUserContent, guardrailsConfig)),
+          detectUrgency(lastUserContent, {
+            config: guardrailsConfig,
+            llmFallbackEnabled: !!llmClassify,
+            ...(llmClassify ? { llmClassify } : {}),
+          }),
+        ])
+
+        // Span informacional pra urgency: emite quando NÃO é low (low é silencio
+        // total — caso comum). medium = haiku fallback; critical = escalation.
+        if (urgency.level !== 'low') {
+          try {
+            traceForGuardrail?.span?.({
+              name: `guardrail.urgency.${urgency.level}`,
+              input: {
+                category: urgency.category ?? null,
+                evidence: urgency.evidence ?? null,
+                source: urgency.source,
+              },
+            })
+          } catch {
+            /* swallow */
+          }
+        }
+
+        // Urgency critical vence pre-filter (risco vital tem prioridade absoluta).
+        if (urgency.level === 'critical') {
+          const reasonText = `urgency:${urgency.category ?? 'unknown'} — ${urgency.evidence ?? lastUserContent.slice(0, 60)}`
+          const { cannedMessageId } = await escalateWithGuardrail({
+            supabase,
+            clinicId,
+            conversationId,
+            agentConfigId: (cfg as { id: string }).id,
+            reasonCategory: 'urgency',
+            reasonText,
+            trace: traceForGuardrail,
+          })
+          return {
+            messageId: cannedMessageId,
+            traceId: trace?.id ?? null,
+            tokensIn: 0,
+            tokensOut: 0,
+          }
+        }
+
+        if (preFilter.matched) {
+          try {
+            traceForGuardrail?.span?.({
+              name: 'guardrail.pre_filter.match',
+              input: {
+                category: preFilter.category,
+                reason: preFilter.reason,
+                evidence: preFilter.evidence,
+              },
+            })
+          } catch {
+            /* swallow */
+          }
+          const reasonText = `${preFilter.category}: ${preFilter.evidence}`
+          const { cannedMessageId } = await escalateWithGuardrail({
+            supabase,
+            clinicId,
+            conversationId,
+            agentConfigId: (cfg as { id: string }).id,
+            reasonCategory: preFilter.reason,
+            reasonText,
+            trace: traceForGuardrail,
+          })
+          return {
+            messageId: cannedMessageId,
+            traceId: trace?.id ?? null,
+            tokensIn: 0,
+            tokensOut: 0,
+          }
+        }
+      }
+
       const generation = trace?.generation?.({
         name: 'agent.generate',
         model: cfg.model,
@@ -285,6 +330,19 @@ export async function dispatchAgent(args: DispatchAgentArgs): Promise<DispatchRe
         const validation = validateOutput(text, guardrailsConfig)
         if (validation.valid) break
 
+        try {
+          traceForGuardrail?.span?.({
+            name: 'guardrail.post_filter.violation',
+            input: {
+              category: validation.violation?.category ?? 'unknown',
+              evidence: validation.violation?.evidence ?? null,
+              attempt: regenerations + 1,
+            },
+          })
+        } catch {
+          /* swallow */
+        }
+
         if (regenerations >= MAX_REGENERATIONS) {
           // Esgotou retries — escala. Caller (Inngest) NÃO retry porque o
           // estado da conversa já mudou pra waiting_human via RPC.
@@ -297,6 +355,7 @@ export async function dispatchAgent(args: DispatchAgentArgs): Promise<DispatchRe
             agentConfigId: (cfg as { id: string }).id,
             reasonCategory,
             reasonText,
+            trace: traceForGuardrail,
           })
           return {
             messageId: cannedMessageId,

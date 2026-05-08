@@ -20,6 +20,12 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { getCannedResponse } from './canned-responses.js'
 import type { EscalatedReason } from './types.js'
 
+/** Subset mínimo do Langfuse trace usado por este helper. Tipo permissivo
+ *  pra evitar dependência circular com src/langfuse.ts. */
+export interface GuardrailTraceSpan {
+  span?: (args: Record<string, unknown>) => void
+}
+
 export interface EscalateWithGuardrailArgs {
   supabase: SupabaseClient
   clinicId: string
@@ -29,6 +35,8 @@ export interface EscalateWithGuardrailArgs {
   reasonCategory: EscalatedReason
   /** Texto livre pro audit (max 500 chars enforcado pelo RPC). */
   reasonText: string
+  /** Optional Langfuse trace pra emitir span 'guardrail.escalate'. */
+  trace?: GuardrailTraceSpan | null
 }
 
 export interface EscalateWithGuardrailResult {
@@ -94,5 +102,22 @@ export async function escalateWithGuardrail(
   if (insErr || !msg) {
     throw new Error(`canned response insert: ${insErr?.message ?? 'unknown'}`)
   }
+
+  // Langfuse span pós-RPC + canned (consolida o evento de escalação numa
+  // única observação). Emit dentro de try/catch porque trace pode estar com
+  // schema diferente em runtime — nunca quebra dispatch por telemetria.
+  try {
+    args.trace?.span?.({
+      name: 'guardrail.escalate',
+      input: {
+        category: reasonCategory,
+        reasonText: safeReason,
+        cannedMessageId: (msg as { id: string }).id,
+      },
+    })
+  } catch {
+    /* swallow — telemetry not load-bearing */
+  }
+
   return { cannedMessageId: (msg as { id: string }).id, escalated: true }
 }

@@ -4,14 +4,20 @@ import {
   createTestClinic,
   createTestIntegration,
   createTestConversation,
+  createTestUser,
+  addUserToClinic,
+  getRlsClient,
   deleteTestClinic,
+  deleteTestUser,
 } from './helpers/setup.js';
 
 const sql = getServiceClient();
 const createdClinicIds: string[] = [];
+const createdUserIds: string[] = [];
 
 afterAll(async () => {
   await Promise.all(createdClinicIds.map((id) => deleteTestClinic(sql, id)));
+  await Promise.all(createdUserIds.map((id) => deleteTestUser(sql, id)));
   await sql.end();
 });
 
@@ -19,6 +25,12 @@ async function makeClinic(name: string): Promise<{ id: string }> {
   const c = await createTestClinic(sql, name);
   createdClinicIds.push(c.id);
   return c;
+}
+
+async function makeUser(): Promise<{ id: string; email: string }> {
+  const u = await createTestUser(sql);
+  createdUserIds.push(u.id);
+  return u;
 }
 
 describe('AI-5: conversations.escalated_reason + escalate_conversation_with_reason', () => {
@@ -185,5 +197,123 @@ describe('AI-5: conversations.escalated_reason + escalate_conversation_with_reas
     expect(guardrailAudit).toBeDefined();
     expect((guardrailAudit?.metadata as { category?: string })?.category).toBe('diagnosis');
     expect((guardrailAudit?.metadata as { source?: string })?.source).toBe('ai');
+  });
+
+  // ─── AI-5 Task 11: cross-tenant defense in depth ──────────────────────────
+
+  it('9. authenticated role NÃO pode chamar escalate_conversation_with_reason (REVOKE)', async () => {
+    // Service role bypassa, mas RPC deliberadamente é service_role-only
+    // (mirrors PR-A escalate_conversation pattern). Authenticated chamando
+    // direto via PostgREST/RPC deveria receber permission denied.
+    const c = await makeClinic('Reason-AuthDeny');
+    const user = await makeUser();
+    await addUserToClinic(sql, c.id, user.id, 'member');
+    const intg = await createTestIntegration(sql, c.id);
+    const conv = await createTestConversation(sql, c.id, intg.id);
+
+    const rls = getRlsClient(sql, user.id);
+
+    await expect(
+      rls.query((tx) => tx`
+        SELECT escalate_conversation_with_reason(
+          ${conv.id}::uuid, ${c.id}::uuid, 'unauthorized attempt', 'medication'
+        )
+      `),
+    ).rejects.toThrow(/permission denied|does not exist|insufficient privilege/i);
+
+    // Conversa permanece intacta após tentativa negada.
+    const [row] = await sql<
+      { state: string; escalated_via: string | null; escalated_reason: string | null }[]
+    >`
+      SELECT state, escalated_via, escalated_reason FROM conversations WHERE id = ${conv.id}
+    `;
+    expect(row?.state).toBe('ai_handling');
+    expect(row?.escalated_via).toBeNull();
+    expect(row?.escalated_reason).toBeNull();
+  });
+
+  it('10. 5-arg transition audit_logs.metadata.after inclui escalated_reason', async () => {
+    // Garante que audit trail captura a transição pra waiting_human com
+    // escalated_reason — necessário pra debug "por que essa conversa foi
+    // escalada por guardrail X?".
+    const c = await makeClinic('Reason-Audit5arg');
+    const intg = await createTestIntegration(sql, c.id);
+    const conv = await createTestConversation(sql, c.id, intg.id);
+
+    await sql`
+      SELECT transition_conversation_state(
+        ${conv.id}::uuid, 'waiting_human', 'guardrail trigger', 'ai', 'urgency'
+      )
+    `;
+
+    type AuditRow = { action: string; metadata: Record<string, unknown> };
+    const [audit] = await sql<AuditRow[]>`
+      SELECT action, metadata FROM audit_logs
+      WHERE resource_id = ${conv.id} AND action = 'conversation.state_changed'
+      ORDER BY created_at DESC LIMIT 1
+    `;
+    expect(audit).toBeDefined();
+    const after = (audit?.metadata as { after?: Record<string, unknown> })?.after ?? {};
+    expect(after['state']).toBe('waiting_human');
+    expect(after['escalated_via']).toBe('ai');
+    expect(after['escalated_reason']).toBe('urgency');
+  });
+
+  it('11. 5-arg lateral move (waiting_human → assigned) preserva escalated_reason', async () => {
+    // Após guardrail escalar com reason='medication', atendente assume
+    // (assigned). Reason deve persistir pra UI badge mostrar histórico
+    // ("foi escalado por medicação"), mesmo após handoff.
+    const c = await makeClinic('Reason-Lateral');
+    const intg = await createTestIntegration(sql, c.id);
+    const conv = await createTestConversation(sql, c.id, intg.id);
+
+    await sql`
+      SELECT escalate_conversation_with_reason(
+        ${conv.id}::uuid, ${c.id}::uuid, 'pedido de medicacao', 'medication'
+      )
+    `;
+    // Atendente assume — usa 5-arg sem escalated_reason_value (preserva).
+    await sql`
+      SELECT transition_conversation_state(
+        ${conv.id}::uuid, 'assigned', 'atendente assumiu', 'manual', NULL
+      )
+    `;
+
+    const [row] = await sql<
+      { state: string; escalated_via: string; escalated_reason: string }[]
+    >`
+      SELECT state, escalated_via, escalated_reason FROM conversations WHERE id = ${conv.id}
+    `;
+    expect(row?.state).toBe('assigned');
+    // escalated_via mudou pra 'manual' (atendente é o novo origin).
+    // escalated_reason preserva 'medication' (não há razão pra zerar).
+    expect(row?.escalated_reason).toBe('medication');
+  });
+
+  it('12. transition pra ai_handling LIMPA escalated_reason (volta IA)', async () => {
+    // Quando atendente devolve conversa pra IA, reason DEVE zerar —
+    // próxima escalada (se houver) começará nova narrativa.
+    const c = await makeClinic('Reason-Reset');
+    const intg = await createTestIntegration(sql, c.id);
+    const conv = await createTestConversation(sql, c.id, intg.id);
+
+    await sql`
+      SELECT escalate_conversation_with_reason(
+        ${conv.id}::uuid, ${c.id}::uuid, 'medicacao', 'medication'
+      )
+    `;
+    // Atendente devolve pra IA via 3-arg (caminho UI).
+    await sql`
+      SELECT transition_conversation_state(${conv.id}::uuid, 'ai_handling', 'devolveu pra IA')
+    `;
+
+    const [row] = await sql<
+      { state: string; escalated_via: string | null; escalated_reason: string | null }[]
+    >`
+      SELECT state, escalated_via, escalated_reason FROM conversations WHERE id = ${conv.id}
+    `;
+    expect(row?.state).toBe('ai_handling');
+    expect(row?.escalated_via).toBeNull();
+    expect(row?.escalated_reason).toBeNull();
   });
 });
