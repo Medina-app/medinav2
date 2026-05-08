@@ -82,6 +82,10 @@ interface FakeRows {
     name: string
     tools: string[]
     knowledge_document_ids?: string[]
+    /** Issue #21: optional pra ToolContext.kbSimilarityThreshold plumbing test. */
+    kb_similarity_threshold?: string | number
+    /** AI-5: optional pra guardrails plumbing tests. */
+    guardrails?: Record<string, unknown>
   } | null
   history?: Array<{
     content: string | null
