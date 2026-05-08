@@ -79,11 +79,18 @@ export async function seedKbFromInput(input: SeedKbInput): Promise<SeedSummary> 
   for (const file of files) {
     const hash = createHash('sha256').update(file.content).digest('hex');
 
+    // Issue #17: lookup filtra por status='indexed'. Documentos zombie
+    // (status='processing' por failure mid-loop, ou 'failed' marcado pelo
+    // catch abaixo) NÃO bloqueiam re-run — script reinsere fresh + retoma.
+    // Trade-off: cria nova row knowledge_documents com mesmo content_hash
+    // (sem UNIQUE constraint), zombie antigo fica como audit. Aceitável
+    // pra script dev; cleanup manual via SQL se quiser purgar zombies.
     const { data: existing, error: lookupErr } = await sb
       .from('knowledge_documents')
       .select('id')
       .eq('clinic_id', clinicId)
       .eq('content_hash', hash)
+      .eq('status', 'indexed')
       .maybeSingle();
     if (lookupErr) throw new Error(`seed-kb: existing lookup failed: ${lookupErr.message}`);
     if (existing) {
@@ -112,37 +119,55 @@ export async function seedKbFromInput(input: SeedKbInput): Promise<SeedSummary> 
 
     const chunks = chunkMarkdown(file.content);
     let totalTokens = 0;
-    for (let i = 0; i < chunks.length; i++) {
-      const text = chunks[i] ?? '';
-      const embedding = await embed(text);
-      const tokens = approxTokens(text);
-      totalTokens += tokens;
-      const { error: chunkErr } = await sb.from('knowledge_chunks').insert({
-        clinic_id: clinicId,
-        document_id: documentId,
-        chunk_index: i,
-        content: text,
-        token_count: tokens,
-        embedding,
-        metadata: {},
-      });
-      if (chunkErr) {
-        throw new Error(`seed-kb: chunk ${i} insert failed for ${file.name}: ${chunkErr.message}`);
+    // Issue #17: try/catch envolvendo loop de chunks. Falha (OpenAI 503,
+    // network, etc) marca status='failed' no documento — distingue zombie
+    // 'processing' (script crashou) de zombie 'failed' (loop falhou
+    // graciosamente). Re-run com lookup status='indexed' refaz ambos.
+    try {
+      for (let i = 0; i < chunks.length; i++) {
+        const text = chunks[i] ?? '';
+        const embedding = await embed(text);
+        const tokens = approxTokens(text);
+        totalTokens += tokens;
+        const { error: chunkErr } = await sb.from('knowledge_chunks').insert({
+          clinic_id: clinicId,
+          document_id: documentId,
+          chunk_index: i,
+          content: text,
+          token_count: tokens,
+          embedding,
+          metadata: {},
+        });
+        if (chunkErr) {
+          throw new Error(`seed-kb: chunk ${i} insert failed for ${file.name}: ${chunkErr.message}`);
+        }
+        summary.chunksCreated++;
       }
-      summary.chunksCreated++;
-    }
 
-    const { error: updateErr } = await sb
-      .from('knowledge_documents')
-      .update({
-        status: 'indexed',
-        chunk_count: chunks.length,
-        total_tokens: totalTokens,
-        indexed_at: new Date().toISOString(),
-      })
-      .eq('id', documentId);
-    if (updateErr) {
-      throw new Error(`seed-kb: status update failed for ${file.name}: ${updateErr.message}`);
+      const { error: updateErr } = await sb
+        .from('knowledge_documents')
+        .update({
+          status: 'indexed',
+          chunk_count: chunks.length,
+          total_tokens: totalTokens,
+          indexed_at: new Date().toISOString(),
+        })
+        .eq('id', documentId);
+      if (updateErr) {
+        throw new Error(`seed-kb: status update failed for ${file.name}: ${updateErr.message}`);
+      }
+    } catch (err) {
+      // Marca zombie como 'failed' e re-lança. Best effort: se update falhar
+      // (DB down), original error ainda propaga.
+      try {
+        await sb
+          .from('knowledge_documents')
+          .update({ status: 'failed' })
+          .eq('id', documentId);
+      } catch {
+        /* swallow secondary error — primary error e o que importa */
+      }
+      throw err;
     }
 
     summary.documentsCreated++;
