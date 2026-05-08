@@ -11,7 +11,7 @@ export const clinics = pgTable(
     plan: text('plan').notNull().default('trial'),
     trialEndsAt: timestamp('trial_ends_at', { withTimezone: true }),
     metadata: jsonb('metadata').notNull().default({}),
-    businessHours: jsonb('business_hours').$type<BusinessHours>().notNull(),
+    businessHours: jsonb('business_hours').$type<BusinessHours>().notNull().default({} as BusinessHours),
     deletedAt: timestamp('deleted_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true }).notNull().defaultNow(),
     updatedAt: timestamp('updated_at', { withTimezone: true }).notNull().defaultNow(),
