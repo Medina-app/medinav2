@@ -7,6 +7,8 @@ type RowSelector = {
   insertResult?: unknown
   /** Resolves `from(table).select().eq()*.in()` to `{ data, error: null }`. */
   inResult?: unknown
+  /** Force `from(table).insert(...)` (bare thenable) to resolve com erro. */
+  insertError?: { message: string }
 }
 
 /**
@@ -71,12 +73,20 @@ export function buildMockSupabase(
     // INSERT — supports both .insert(p).select().single() and bare .insert(p) (thenable)
     const insert = vi.fn((payload: unknown) => {
       insertCalls.push({ table, payload })
-      const single = vi.fn().mockResolvedValue({ data: cfg.insertResult ?? { id: 'new-id' }, error: null })
+      const insertErr = cfg.insertError ?? null
+      const single = vi.fn().mockResolvedValue({
+        data: insertErr ? null : cfg.insertResult ?? { id: 'new-id' },
+        error: insertErr,
+      })
       const selectAfterInsert = vi.fn(() => ({ single }))
       return Object.assign(
         { select: selectAfterInsert },
-        // Bare insert: `await sb.from('X').insert(p)` resolves to { error: null }.
-        { then: (resolve: (v: { error: null }) => void) => resolve({ error: null }) },
+        // Bare insert: `await sb.from('X').insert(p)` resolves to { error }.
+        {
+          then: (
+            resolve: (v: { error: { message: string } | null }) => void,
+          ) => resolve({ error: insertErr }),
+        },
       )
     })
 

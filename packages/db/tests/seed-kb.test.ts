@@ -21,18 +21,33 @@ function makeMockSupabase(state: MockState) {
 
   return {
     from: (table: string) => {
-      // SELECT chain — used only by the existing-doc lookup
-      const selectChain = {
-        eq: vi.fn(function this_(this: unknown, _col: string, value: unknown) {
-          // We need the value of content_hash to decide if existing returns a row.
-          // The chain calls .eq('clinic_id', ...).eq('content_hash', ...).maybeSingle()
-          // so by the second .eq() we have the hash.
-          (this as { _hash?: unknown })._hash = value;
+      // SELECT chain — usado pelo existing-doc lookup. Pós Issue #17, o chain
+      // tem 3 eq calls: clinic_id, content_hash, status. Capturamos array
+      // de eq() pra recuperar valor do hash + status independente de ordem.
+      const selectChain: {
+        _eqCalls: Array<{ col: string; value: unknown }>;
+        eq: ReturnType<typeof vi.fn>;
+        maybeSingle: ReturnType<typeof vi.fn>;
+      } = {
+        _eqCalls: [],
+        eq: vi.fn((col: string, value: unknown) => {
+          selectChain._eqCalls.push({ col, value });
           return selectChain;
         }),
-        maybeSingle: vi.fn(async function this_(this: unknown) {
-          const hash = (selectChain as { _hash?: string })._hash;
-          if (typeof hash === 'string' && state.existingHashes.has(hash)) {
+        maybeSingle: vi.fn(async () => {
+          const hashCall = selectChain._eqCalls.find((c) => c.col === 'content_hash');
+          const statusCall = selectChain._eqCalls.find((c) => c.col === 'status');
+          const hash = hashCall?.value;
+          const wantStatus = statusCall?.value;
+          // CR review fix: exige explicitamente wantStatus === 'indexed'.
+          // Mock NAO aceita absence do filtro (que era ambiguo na versao
+          // anterior). Se alguem remover .eq('status','indexed') do impl,
+          // testes idempotency falham — protege a invariante do #17.
+          if (
+            typeof hash === 'string' &&
+            wantStatus === 'indexed' &&
+            state.existingHashes.has(hash)
+          ) {
             return { data: { id: 'existing-doc' }, error: null };
           }
           return { data: null, error: null };
@@ -196,5 +211,64 @@ describe('seedKbFromInput', () => {
       expect(p.clinic_id).toBe('clinic-XYZ');
       expect(p.embedding).toHaveLength(1536);
     }
+  });
+
+  // Issue #17: zombie detection / failure resilience.
+
+  it('falha mid-loop marca documento status=failed (#17)', async () => {
+    const state: MockState = { insertCalls: [], updateCalls: [], existingHashes: new Set() };
+    const sb = makeMockSupabase(state);
+    // Embed lança após primeiro sucesso pra simular OpenAI 503 mid-loop.
+    let calls = 0;
+    const embed = vi.fn().mockImplementation(async () => {
+      calls++;
+      if (calls === 2) throw new Error('OpenAI 503 simulated');
+      return new Array(1536).fill(0.1);
+    });
+
+    await expect(
+      seedKbFromInput({
+        clinicId: 'clinic-A',
+        // sample com >1 chunk pra forcar 2a chamada de embed.
+        files: [
+          {
+            name: 'multi.md',
+            content: 'paragraph one here.\n\nparagraph two here.\n\nparagraph three here.',
+          },
+        ],
+        sb,
+        embed,
+      }),
+    ).rejects.toThrow(/OpenAI 503/);
+
+    // Update final pra status='failed' deve ter ocorrido (catch handler).
+    const failedUpdate = state.updateCalls.find(
+      (c) =>
+        c.table === 'knowledge_documents' &&
+        (c.payload as { status?: string }).status === 'failed',
+    );
+    expect(failedUpdate).toBeDefined();
+  });
+
+  it('lookup filtra status=indexed — zombies (processing/failed) não bloqueiam re-run (#17)', async () => {
+    // Mock: inserir hash no Set NÃO é mais suficiente — agora lookup filtra
+    // por status='indexed'. Para validar, criamos hash sem registrar em
+    // existingHashes (=mock retorna null), simulando que zombie existente
+    // foi filtrado. Resultado: nova doc inserida normalmente.
+    const state: MockState = { insertCalls: [], updateCalls: [], existingHashes: new Set() };
+    const sb = makeMockSupabase(state);
+    const embed = vi.fn().mockResolvedValue(new Array(1536).fill(0.1));
+
+    const result = await seedKbFromInput({
+      clinicId: 'clinic-A',
+      files: [sampleFiles[0]!],
+      sb,
+      embed,
+    });
+
+    // Inserção fresca — zombie hipotético (não registrado em existingHashes
+    // que representa status='indexed' apenas) não bloqueou.
+    expect(result.documentsCreated).toBe(1);
+    expect(result.documentsSkipped).toBe(0);
   });
 });

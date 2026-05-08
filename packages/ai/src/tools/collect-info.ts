@@ -21,11 +21,6 @@ const INSTRUCTIONS: Record<Field, string> = {
   phone_alt: 'Peça um telefone alternativo pra contato.',
 }
 
-interface ConvRow {
-  metadata: Record<string, unknown> | null
-  clinic_id: string
-}
-
 export function buildCollectInfoTool(ctx: ToolContext) {
   return createTool({
     id: 'collect_patient_info',
@@ -36,33 +31,23 @@ export function buildCollectInfoTool(ctx: ToolContext) {
       const { field } = inputData as z.infer<typeof InputSchema>
       const { supabase, clinicId, conversationId } = ctx
 
-      // Cross-tenant guard via dual eq filter on clinic_id.
-      const { data: convData, error: cErr } = await supabase
-        .from('conversations')
-        .select('metadata, clinic_id')
-        .eq('id', conversationId)
-        .eq('clinic_id', clinicId)
-        .single()
-      if (cErr || !convData) {
-        throw new Error(`collect_info: lookup failed: ${cErr?.message ?? 'not found'}`)
-      }
-      const conv = convData as ConvRow
-
-      const metadata = (conv.metadata ?? {}) as Record<string, unknown>
-      const collected = (metadata['collected_info'] as Record<string, string> | undefined) ?? {}
-      const nextMetadata = {
-        ...metadata,
-        collected_info: { ...collected, [field]: new Date().toISOString() },
+      // Issue #12 fix: chamada atomic via RPC. RPC faz FOR UPDATE lock +
+      // jsonb merge num único transaction; cross-tenant guard interno.
+      // Substitui o read-modify-write anterior (race condition teórica).
+      const { error: rpcErr } = await supabase.rpc('collect_info_atomic', {
+        p_conversation_id: conversationId,
+        p_clinic_id: clinicId,
+        p_field: field,
+        p_value: new Date().toISOString(),
+      })
+      if (rpcErr) {
+        throw new Error(`collect_info: ${rpcErr.message}`)
       }
 
-      const { error: uErr } = await supabase
-        .from('conversations')
-        .update({ metadata: nextMetadata })
-        .eq('id', conversationId)
-        .eq('clinic_id', clinicId)
-      if (uErr) throw new Error(`collect_info: update failed: ${uErr.message}`)
-
-      await supabase.from('audit_logs').insert({
+      // Audit complementar (RPC não emite — paralelo ao pattern dos outros
+      // tools como escalate). Service_role insert direto. CR review #2:
+      // propaga erro se insert falhar — silenciar derrota proposito do audit.
+      const { error: auditErr } = await supabase.from('audit_logs').insert({
         clinic_id: clinicId,
         user_id: null,
         action: 'agent.tool.collect_info',
@@ -70,6 +55,9 @@ export function buildCollectInfoTool(ctx: ToolContext) {
         resource_id: conversationId,
         metadata: { field, tool: 'collect_patient_info' },
       })
+      if (auditErr) {
+        throw new Error(`collect_info: audit_logs insert failed: ${auditErr.message}`)
+      }
 
       return { ok: true as const, field, instruction: INSTRUCTIONS[field] }
     },
