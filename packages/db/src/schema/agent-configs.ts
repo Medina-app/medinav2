@@ -33,6 +33,11 @@ export const agentConfigs = pgTable(
     guardrails: jsonb('guardrails').notNull().default(sql`'{}'`),
     handoffRules: jsonb('handoff_rules').notNull().default(sql`'{}'`),
     knowledgeDocumentIds: uuid('knowledge_document_ids').array().notNull().default(sql`'{}'`),
+    /** Issue #21: per-clinic similarity threshold pra search_kb tool. Default
+     *  empirico 0.4 (text-embedding-3-small + PT-BR). CHECK [0, 1]. */
+    kbSimilarityThreshold: numeric('kb_similarity_threshold', { precision: 3, scale: 2 })
+      .notNull()
+      .default('0.4'),
     metadata: jsonb('metadata').notNull().default(sql`'{}'`),
     publishedAt: timestamp('published_at', { withTimezone: true }),
     publishedBy: uuid('published_by'),
@@ -59,6 +64,10 @@ export const agentConfigs = pgTable(
       sql`${t.temperature} >= 0 AND ${t.temperature} <= 2`,
     ),
     check('agent_configs_max_tokens_check', sql`${t.maxTokens} > 0`),
+    check(
+      'agent_configs_kb_similarity_threshold_valid',
+      sql`${t.kbSimilarityThreshold} >= 0.0 AND ${t.kbSimilarityThreshold} <= 1.0`,
+    ),
   ],
 );
 

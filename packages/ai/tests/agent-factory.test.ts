@@ -39,6 +39,9 @@ const baseRow = {
   tools: [],
   guardrails: {},
   knowledge_document_ids: [],
+  // Issue #21: PostgREST serializa NUMERIC como string. Default 0.4 do
+  // schema. Tests verificam que rowToConfig faz parseFloat corretamente.
+  kb_similarity_threshold: '0.40',
 }
 
 describe('createAgent', () => {
@@ -192,5 +195,30 @@ describe('createAgent', () => {
     const supabase = makeSupabaseMock({ ...baseRow, guardrails: null })
     const result = await createAgent({ clinicId: 'clinic-abc', supabase })
     expect(result.config.guardrails).toEqual({})
+  })
+
+  // Issue #21: kb_similarity_threshold parsing — PostgREST string → number
+  // pra propagar pra ToolContext.kbSimilarityThreshold.
+
+  it('parses kb_similarity_threshold from PostgREST string ("0.40" → 0.4)', async () => {
+    const { createAgent } = await import('../src/agent-factory.js')
+    const supabase = makeSupabaseMock({ ...baseRow, kb_similarity_threshold: '0.40' })
+    const result = await createAgent({ clinicId: 'clinic-abc', supabase })
+    expect(result.config.kbSimilarityThreshold).toBeCloseTo(0.4, 2)
+    expect(typeof result.config.kbSimilarityThreshold).toBe('number')
+  })
+
+  it('coalesces kb_similarity_threshold=null to default 0.4 (legacy row pre-#21)', async () => {
+    const { createAgent } = await import('../src/agent-factory.js')
+    const supabase = makeSupabaseMock({ ...baseRow, kb_similarity_threshold: null })
+    const result = await createAgent({ clinicId: 'clinic-abc', supabase })
+    expect(result.config.kbSimilarityThreshold).toBe(0.4)
+  })
+
+  it('aceita kb_similarity_threshold como number (idempotência se driver evoluir)', async () => {
+    const { createAgent } = await import('../src/agent-factory.js')
+    const supabase = makeSupabaseMock({ ...baseRow, kb_similarity_threshold: 0.65 })
+    const result = await createAgent({ clinicId: 'clinic-abc', supabase })
+    expect(result.config.kbSimilarityThreshold).toBe(0.65)
   })
 })

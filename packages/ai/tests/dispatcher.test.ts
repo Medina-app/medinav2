@@ -82,6 +82,10 @@ interface FakeRows {
     name: string
     tools: string[]
     knowledge_document_ids?: string[]
+    /** Issue #21: optional pra ToolContext.kbSimilarityThreshold plumbing test. */
+    kb_similarity_threshold?: string | number
+    /** AI-5: optional pra guardrails plumbing tests. */
+    guardrails?: Record<string, unknown>
   } | null
   history?: Array<{
     content: string | null
@@ -473,6 +477,59 @@ describe('dispatchAgent', () => {
 
     const ctxArg = buildSpy.mock.calls[0]?.[0] as { knowledgeDocumentIds?: readonly string[] }
     expect(ctxArg.knowledgeDocumentIds).toEqual([])
+
+    vi.doUnmock('../src/tools/build.js')
+    vi.resetModules()
+  })
+
+  // ─── Issue #21: kb_similarity_threshold plumbing ───────────────────────────
+
+  it('SELECT inclui kb_similarity_threshold (#21)', async () => {
+    const { sb, spies } = makeSupabase({
+      conversation: baseConv,
+      agentConfig: baseCfg,
+    })
+    const { dispatchAgent } = await import('../src/dispatcher.js')
+    await dispatchAgent({ conversationId: 'conv-1', clinicId: 'clinic-A', messageId: 'm', supabase: sb })
+
+    const selectArg = spies.agentSelect.mock.calls[0]?.[0] as string
+    expect(selectArg).toContain('kb_similarity_threshold')
+  })
+
+  it('passa kb_similarity_threshold do agent_config pra ToolContext (#21)', async () => {
+    vi.resetModules()
+    const buildSpy = vi.fn().mockReturnValue({})
+    vi.doMock('../src/tools/build.js', () => ({ buildToolsFromConfig: buildSpy }))
+
+    const { sb } = makeSupabase({
+      conversation: baseConv,
+      agentConfig: { ...baseCfg, kb_similarity_threshold: '0.65' },
+    })
+    const { dispatchAgent } = await import('../src/dispatcher.js')
+    await dispatchAgent({ conversationId: 'conv-1', clinicId: 'clinic-A', messageId: 'm', supabase: sb })
+
+    expect(buildSpy).toHaveBeenCalledTimes(1)
+    const ctxArg = buildSpy.mock.calls[0]?.[0] as { kbSimilarityThreshold?: number }
+    expect(ctxArg.kbSimilarityThreshold).toBe(0.65)
+
+    vi.doUnmock('../src/tools/build.js')
+    vi.resetModules()
+  })
+
+  it('fallback kbSimilarityThreshold=0.4 quando agent_config omite o field (legacy row pre-#21)', async () => {
+    vi.resetModules()
+    const buildSpy = vi.fn().mockReturnValue({})
+    vi.doMock('../src/tools/build.js', () => ({ buildToolsFromConfig: buildSpy }))
+
+    const { sb } = makeSupabase({
+      conversation: baseConv,
+      agentConfig: { ...baseCfg }, // sem kb_similarity_threshold
+    })
+    const { dispatchAgent } = await import('../src/dispatcher.js')
+    await dispatchAgent({ conversationId: 'conv-1', clinicId: 'clinic-A', messageId: 'm', supabase: sb })
+
+    const ctxArg = buildSpy.mock.calls[0]?.[0] as { kbSimilarityThreshold?: number }
+    expect(ctxArg.kbSimilarityThreshold).toBe(0.4)
 
     vi.doUnmock('../src/tools/build.js')
     vi.resetModules()

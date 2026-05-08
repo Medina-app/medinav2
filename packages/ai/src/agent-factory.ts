@@ -36,6 +36,15 @@ function parseGuardrails(raw: unknown): GuardrailsConfig {
   return raw as GuardrailsConfig
 }
 
+/** Issue #21: PostgREST serializa NUMERIC como string ("0.40"); converte pra
+ *  number com fallback 0.4 se NULL/missing (back-compat com rows pré-0025). */
+function parseKbThreshold(raw: unknown): number {
+  if (raw == null) return 0.4
+  if (typeof raw === 'number') return raw
+  const parsed = parseFloat(String(raw))
+  return Number.isFinite(parsed) ? parsed : 0.4
+}
+
 function rowToConfig(row: Record<string, unknown>): AgentConfig {
   return {
     id: row['id'] as string,
@@ -50,6 +59,7 @@ function rowToConfig(row: Record<string, unknown>): AgentConfig {
     tools: (row['tools'] as string[] | null) ?? [],
     guardrails: parseGuardrails(row['guardrails']),
     knowledgeDocumentIds: (row['knowledge_document_ids'] as string[] | null) ?? [],
+    kbSimilarityThreshold: parseKbThreshold(row['kb_similarity_threshold']),
   }
 }
 
