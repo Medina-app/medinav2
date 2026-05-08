@@ -48,4 +48,25 @@ describe('generateEmbedding', () => {
       'OpenAI embeddings returned empty data'
     )
   })
+
+  // Issue #19: SDK default timeout is 10min — risco de hangup do tool call.
+  // Inngest dispatch corta antes (workflow timeout) mas resposta WhatsApp
+  // ja vai ter atrasado. timeout 30s + maxRetries 2 explicitos.
+  it('constructs OpenAI client with timeout=30000 and maxRetries=2 (#19)', async () => {
+    vi.resetModules() // garantir nova instancia singleton
+    const { default: MockOpenAI } = await import('openai')
+    ;(MockOpenAI as unknown as Record<string, unknown>)['_mockCreate'] = vi.fn().mockResolvedValue({
+      data: [{ embedding: new Array(1536).fill(0.1) }],
+    })
+    const { generateEmbedding } = await import('../src/embeddings.js')
+    await generateEmbedding('warm up call to instantiate client')
+
+    const ctorCalls = (MockOpenAI as unknown as { mock: { calls: unknown[][] } }).mock.calls
+    expect(ctorCalls.length).toBeGreaterThan(0)
+    const firstCallArgs = ctorCalls[0]?.[0] as { apiKey?: string; timeout?: number; maxRetries?: number }
+    expect(firstCallArgs).toMatchObject({
+      timeout: 30_000,
+      maxRetries: 2,
+    })
+  })
 })
