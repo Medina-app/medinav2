@@ -3,6 +3,7 @@ import { createOpenRouter } from '@openrouter/ai-sdk-provider'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { AgentNotFoundError, NamespacingViolationError } from './errors.js'
 import type { AgentConfig, CreateAgentResult } from './types.js'
+import type { GuardrailsConfig } from './guardrails/types.js'
 
 export interface CreateAgentOpts {
   clinicId: string
@@ -23,6 +24,18 @@ function resolveModel(modelId: string) {
   return openrouter(modelId)
 }
 
+/**
+ * AI-5: agent_configs.guardrails é jsonb (object). Coalesce null/array (legacy
+ * row defensiveness) → {}. Cast pra GuardrailsConfig sem validar shape — campos
+ * extras viram no-ops em mergeGuardrails (defaults.ts), e campos esperados são
+ * tipados nos consumers (pre-filter, urgency-detector, post-filter).
+ */
+function parseGuardrails(raw: unknown): GuardrailsConfig {
+  if (raw == null) return {}
+  if (typeof raw !== 'object' || Array.isArray(raw)) return {}
+  return raw as GuardrailsConfig
+}
+
 function rowToConfig(row: Record<string, unknown>): AgentConfig {
   return {
     id: row['id'] as string,
@@ -35,7 +48,7 @@ function rowToConfig(row: Record<string, unknown>): AgentConfig {
     temperature: parseFloat(row['temperature'] as string),
     maxTokens: row['max_tokens'] as number,
     tools: (row['tools'] as string[] | null) ?? [],
-    guardrails: (row['guardrails'] as string[] | null) ?? [],
+    guardrails: parseGuardrails(row['guardrails']),
     knowledgeDocumentIds: (row['knowledge_document_ids'] as string[] | null) ?? [],
   }
 }

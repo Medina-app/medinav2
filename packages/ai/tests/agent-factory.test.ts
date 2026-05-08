@@ -37,7 +37,7 @@ const baseRow = {
   temperature: '0.70',
   max_tokens: 1024,
   tools: [],
-  guardrails: [],
+  guardrails: {},
   knowledge_document_ids: [],
 }
 
@@ -151,5 +151,46 @@ describe('createAgent', () => {
     const callArg = MockAgent.mock.calls[0]?.[0] as Record<string, unknown> | undefined
     expect(callArg).toBeDefined()
     expect('tools' in (callArg ?? {})).toBe(false)
+  })
+
+  // AI-5: guardrails is jsonb object (GuardrailsConfig), not string[].
+  // Existing prod row has guardrails={}; rowToConfig must produce a valid
+  // empty GuardrailsConfig that callers can read defensively.
+  it('parses guardrails={} as empty GuardrailsConfig object', async () => {
+    const { createAgent } = await import('../src/agent-factory.js')
+    const supabase = makeSupabaseMock({ ...baseRow, guardrails: {} })
+    const result = await createAgent({ clinicId: 'clinic-abc', supabase })
+    expect(result.config.guardrails).toEqual({})
+    expect(Array.isArray(result.config.guardrails)).toBe(false)
+    // Optional fields are undefined on empty config — callers pass through merge
+    // helper, no need to default.
+    const g = result.config.guardrails as { disabled_default_categories?: unknown }
+    expect(g.disabled_default_categories).toBeUndefined()
+  })
+
+  it('preserves guardrails fields when populated (overrides + opt-outs)', async () => {
+    const { createAgent } = await import('../src/agent-factory.js')
+    const populated = {
+      ...baseRow,
+      guardrails: {
+        additional_blocked_patterns: { custom_cat: ['\\bfoo\\b'] },
+        disabled_default_categories: ['diagnostic_advice'],
+      },
+    }
+    const supabase = makeSupabaseMock(populated)
+    const result = await createAgent({ clinicId: 'clinic-abc', supabase })
+    const g = result.config.guardrails as {
+      additional_blocked_patterns?: Record<string, string[]>
+      disabled_default_categories?: string[]
+    }
+    expect(g.additional_blocked_patterns?.['custom_cat']).toEqual(['\\bfoo\\b'])
+    expect(g.disabled_default_categories).toEqual(['diagnostic_advice'])
+  })
+
+  it('coalesces guardrails=null to {} (defensive for legacy rows)', async () => {
+    const { createAgent } = await import('../src/agent-factory.js')
+    const supabase = makeSupabaseMock({ ...baseRow, guardrails: null })
+    const result = await createAgent({ clinicId: 'clinic-abc', supabase })
+    expect(result.config.guardrails).toEqual({})
   })
 })
