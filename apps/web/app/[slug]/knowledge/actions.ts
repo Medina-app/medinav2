@@ -52,8 +52,12 @@ export async function deleteKbDocumentAction(input: {
 
   if (delErr) return { error: delErr.message };
 
-  // Audit complementar (best-effort — não falha o delete se audit falhar).
-  await sb.from('audit_logs').insert({
+  // Audit complementar — best-effort por design: o DELETE já aconteceu e é
+  // irreversível (cascade FK). Throw em audit failure deixaria UX confusa
+  // (admin acharia que delete falhou quando na verdade foi). Capturamos
+  // erro pra observability via console.warn — falha de audit é incidente
+  // mas não bloqueia o fluxo.
+  const { error: auditErr } = await sb.from('audit_logs').insert({
     clinic_id: ctx.clinicId,
     user_id: ctx.user.id,
     action: 'admin.kb.delete',
@@ -61,6 +65,11 @@ export async function deleteKbDocumentAction(input: {
     resource_id: parsed.data.documentId,
     metadata: { source: 'admin_ui' },
   });
+  if (auditErr) {
+    console.warn(
+      `kb.delete audit failed (delete succeeded but audit not recorded): clinic=${ctx.clinicId} doc=${parsed.data.documentId} err=${auditErr.message}`,
+    );
+  }
 
   revalidatePath(`/${ctx.clinicSlug}/knowledge`);
   return { ok: true };

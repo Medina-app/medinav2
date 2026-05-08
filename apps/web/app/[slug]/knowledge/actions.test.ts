@@ -140,4 +140,27 @@ describe('deleteKbDocumentAction', () => {
       error: 'permission denied for table knowledge_documents',
     });
   });
+
+  it('audit failure NÃO bloqueia delete (best-effort) mas emite console.warn', async () => {
+    // Self-review: delete já aconteceu e é irreversível (cascade FK). Throw
+    // em audit failure deixaria UX confusa. Capturamos via console.warn pra
+    // observability sem propagar erro.
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const sb = buildSupabase({
+      document: { clinic_id: 'clinic-1' },
+      auditError: 'audit_logs table down',
+    });
+    mockGetSupabaseServerClient.mockReturnValue(sb.client);
+
+    const result = await deleteKbDocumentAction({
+      documentId: '11111111-1111-1111-1111-111111111111',
+    });
+
+    expect(result).toEqual({ ok: true });
+    expect(sb.eqDelete).toHaveBeenCalled();
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining('audit failed'),
+    );
+    warnSpy.mockRestore();
+  });
 });
