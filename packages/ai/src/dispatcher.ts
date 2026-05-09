@@ -11,6 +11,7 @@ import { escalateWithGuardrail } from './guardrails/escalate-with-guardrail.js'
 import { createHaikuClassifier } from './guardrails/haiku-classifier.js'
 import { sanitizeEvidence } from './guardrails/sanitize.js'
 import type { EscalatedReason, GuardrailsConfig } from './guardrails/types.js'
+import { resolveCalcomConfig, type CalcomClientBuilder } from './calcom-config.js'
 
 const HISTORY_LIMIT = 20
 /** Cap the agent loop. AI-SDK default is 1 (single-shot), which would prevent
@@ -31,6 +32,10 @@ export interface DispatchAgentArgs {
   supabase: SupabaseClient
   /** Optional override; defaults to 'agente-principal' (multi-agent prep). */
   agentName?: string
+  /** AI-4: builder pra CalcomClient quando integration encontrada. Tests injetam
+   *  mock; produção usa factory que importa CalcomClient de @medina/integrations-calcom.
+   *  Undefined → tools Cal.com retornam {ok:false, error:'calcom_not_configured'}. */
+  buildCalcomClient?: CalcomClientBuilder
 }
 
 export interface DispatchResult {
@@ -101,7 +106,7 @@ function maybeHaikuClassifier(): LlmClassify | undefined {
  *   - DB errors on insert
  */
 export async function dispatchAgent(args: DispatchAgentArgs): Promise<DispatchResult> {
-  const { supabase, conversationId, clinicId, agentName = 'agente-principal' } = args
+  const { supabase, conversationId, clinicId, agentName = 'agente-principal', buildCalcomClient } = args
 
   // 1. Load conversation + verify state and clinic ownership.
   const { data: conv, error: cErr } = await supabase
@@ -175,12 +180,29 @@ export async function dispatchAgent(args: DispatchAgentArgs): Promise<DispatchRe
       : typeof rawThreshold === 'number'
         ? rawThreshold
         : parseFloat(rawThreshold)
+  // AI-4: lookup Cal.com integration apenas se alguma tool Cal.com aparece em
+  // toolNames. Skip lookup pra clinics sem integration (zero overhead). Builder
+  // injetável pra testes; produção wireia CalcomClient real em apps/web/lib/inngest.
+  const needsCalcom =
+    buildCalcomClient !== undefined &&
+    toolNames.some((n) =>
+      n === 'check_availability' ||
+      n === 'confirm_appointment' ||
+      n === 'cancel_appointment' ||
+      n === 'reschedule_appointment',
+    )
+  const calcomConfig = needsCalcom ? await resolveCalcomConfig(supabase, clinicId) : null
+  const calcomClient =
+    calcomConfig && buildCalcomClient ? buildCalcomClient(calcomConfig) : undefined
+
   const toolCtx: ToolContext = {
     clinicId,
     conversationId,
     supabase,
     knowledgeDocumentIds,
     kbSimilarityThreshold,
+    calcomClient,
+    calcomDefaultEventTypeId: calcomConfig?.defaultEventTypeId,
   }
   const tools = buildToolsFromConfig(toolCtx, toolNames)
   const { agent } = await createAgent({ clinicId, agentName, supabase, tools })

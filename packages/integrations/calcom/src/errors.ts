@@ -35,7 +35,7 @@ export class CalSlotConflictError extends CalApiError {
 
 /** Network/timeout durante retry. Indistinguível de upstream down. */
 export class CalUnavailableError extends Error {
-  readonly cause: unknown;
+  override readonly cause: unknown;
   constructor(cause: unknown) {
     super('Cal.com unreachable after retries');
     this.name = 'CalUnavailableError';

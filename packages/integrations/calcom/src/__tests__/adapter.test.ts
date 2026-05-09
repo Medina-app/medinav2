@@ -20,14 +20,15 @@ function makeIntegration(): ClinicIntegration {
   } as unknown as ClinicIntegration;
 }
 
-function makeCtx(payload: unknown, opts: { inngestSend?: typeof vi.fn } = {}): WebhookContext {
+function makeCtx(payload: unknown, opts: { inngestSend?: ReturnType<typeof vi.fn> } = {}): WebhookContext {
+  const send = opts.inngestSend ?? vi.fn().mockResolvedValue({ ids: ['evt-1'] });
   return {
     clinicId: 'clinic-1',
     integration: makeIntegration(),
     payload,
     headers: { 'x-cal-signature-256': 'sig' },
     rawBody: JSON.stringify(payload),
-    inngestSend: opts.inngestSend ?? (vi.fn().mockResolvedValue({ ids: ['evt-1'] }) as never),
+    inngestSend: send as unknown as WebhookContext['inngestSend'],
   };
 }
 
