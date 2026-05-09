@@ -3,6 +3,10 @@ import { buildEscalateTool } from './escalate.js'
 import { buildCollectInfoTool } from './collect-info.js'
 import { buildBusinessHoursTool } from './business-hours.js'
 import { buildSearchKbTool } from './search-kb.js'
+import { buildCheckAvailabilityTool } from './check-availability.js'
+import { buildConfirmAppointmentTool } from './confirm-appointment.js'
+import { buildCancelAppointmentTool } from './cancel-appointment.js'
+import { buildRescheduleAppointmentTool } from './reschedule-appointment.js'
 
 type ToolBuilder = (ctx: ToolContext) => unknown
 
@@ -11,6 +15,13 @@ const REGISTRY: Record<string, ToolBuilder> = {
   collect_patient_info: buildCollectInfoTool,
   check_business_hours: buildBusinessHoursTool,
   search_kb: buildSearchKbTool,
+  // AI-4: tools Cal.com — só funcionam quando ToolContext.calcomClient
+  // está injetado (ver agent-factory.ts wiring). Sem client ativo, tools
+  // retornam {ok:false, error:'calcom_not_configured'}.
+  check_availability: buildCheckAvailabilityTool,
+  confirm_appointment: buildConfirmAppointmentTool,
+  cancel_appointment: buildCancelAppointmentTool,
+  reschedule_appointment: buildRescheduleAppointmentTool,
 }
 
 /**

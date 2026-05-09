@@ -1,4 +1,5 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
+import { CalcomClient } from '@medina/integrations-calcom/client';
 import {
   dispatchAgent,
   AgentDispatchSkipped,
@@ -125,8 +126,19 @@ function makeAdminSupabase(): SupabaseClient {
 function makeDefaultDeps(): DispatchAiAgentDeps {
   // Each invocation gets its own Supabase admin client to avoid sharing
   // across requests (unlikely to matter in practice but cheap insurance).
+  // AI-4: buildCalcomClient instancia CalcomClient quando integration ativa
+  // existe pra clinic. Lazy import pra evitar penalty de boot pra clinics
+  // sem Cal.com configurado.
   return {
-    dispatchAgent: (args) => dispatchAgent({ ...args, supabase: makeAdminSupabase() }),
+    dispatchAgent: (args) =>
+      dispatchAgent({
+        ...args,
+        supabase: makeAdminSupabase(),
+        // AI-4: instancia CalcomClient quando dispatcher resolve integration
+        // ativa pra clinic. Sem integration → callback nem é chamado.
+        buildCalcomClient: (cfg) =>
+          new CalcomClient({ baseUrl: cfg.baseUrl, apiKey: cfg.apiKey }),
+      }),
   };
 }
 

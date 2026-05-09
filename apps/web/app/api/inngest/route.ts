@@ -11,6 +11,7 @@ import {
 } from '@/lib/inngest/functions/dispatch-ai-agent';
 import { reindexDocument } from '@/lib/inngest/functions/reindex-document';
 import { processKbDocument } from '@/lib/inngest/functions/process-kb-document';
+import { processCalcomEvent } from '@/lib/inngest/functions/process-calcom-event';
 
 // signingKey + isDev are configured on the client (lib/inngest/client.ts)
 // and inherited here, so the serve handler stays minimal.
@@ -24,5 +25,6 @@ export const { GET, POST, PUT } = serve({
     onDispatchAiAgentFailure,
     reindexDocument,
     processKbDocument,
+    processCalcomEvent,
   ],
 });
