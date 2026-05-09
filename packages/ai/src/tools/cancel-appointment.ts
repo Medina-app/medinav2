@@ -33,9 +33,9 @@ export function buildCancelAppointmentTool(ctx: ToolContext) {
       const { appointmentId, reason } = inputData as z.infer<typeof InputSchema>
       const { supabase, clinicId, conversationId, calcomClient } = ctx
 
-      if (!calcomClient) {
-        return { ok: false as const, error: 'calcom_not_configured' as const }
-      }
+      // Guard calcomClient avaliado SÓ se o appointment tem calcom_uid (ver
+      // step 2). Appointments criados manualmente sem vínculo Cal.com podem
+      // ser cancelados localmente mesmo sem integração ativa.
 
       // Cross-tenant lookup.
       const { data: appt, error: apptErr } = await supabase
@@ -72,6 +72,13 @@ export function buildCancelAppointmentTool(ctx: ToolContext) {
       // Step 2: Cal.com cancel — graceful em 404 (booking já cancelado externamente).
       let calcomCancelOk = false
       if (apptRow.calcom_uid) {
+        if (!calcomClient) {
+          return {
+            ok: false as const,
+            error: 'calcom_not_configured' as const,
+            message: 'Consulta vinculada ao Cal.com mas integração ausente — não é possível cancelar com segurança.',
+          }
+        }
         try {
           await calcomClient.cancelBooking(apptRow.calcom_uid, reason)
           calcomCancelOk = true
@@ -89,7 +96,7 @@ export function buildCancelAppointmentTool(ctx: ToolContext) {
         }
       } else {
         // Appointment sem calcom_uid (manual ou origem não-Cal.com). Apenas
-        // local cancel.
+        // local cancel — funciona mesmo sem calcomClient.
         calcomCancelOk = true
       }
 

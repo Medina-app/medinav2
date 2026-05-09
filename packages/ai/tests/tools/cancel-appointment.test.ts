@@ -171,4 +171,36 @@ describe('cancel_appointment tool', () => {
     expect(client.cancelBooking).not.toHaveBeenCalled()
     expect(rpcCalls[0]?.name).toBe('transition_appointment_status')
   })
+
+  it('appt sem calcom_uid + sem calcomClient → cancela local OK (CR PR#29)', async () => {
+    const { supabase, rpcCalls } = buildSb({
+      appointment: { ...baseAppt, calcom_uid: null },
+    })
+    const ctx: ToolContext = {
+      clinicId: 'clinic-A',
+      conversationId: 'conv-1',
+      supabase: supabase as never,
+      // calcomClient omitido — não é necessário sem calcom_uid
+    }
+    const result = (await getExec(buildCancelAppointmentTool(ctx))(baseInput)) as { ok: true }
+    expect(result.ok).toBe(true)
+    expect(rpcCalls[0]?.name).toBe('transition_appointment_status')
+  })
+
+  it('appt COM calcom_uid + sem calcomClient → calcom_not_configured (não cancela)', async () => {
+    const { supabase, rpcCalls } = buildSb({ appointment: baseAppt })
+    const ctx: ToolContext = {
+      clinicId: 'clinic-A',
+      conversationId: 'conv-1',
+      supabase: supabase as never,
+      // calcomClient omitido — appt tem vínculo Cal.com, não pode cancelar com segurança
+    }
+    const result = (await getExec(buildCancelAppointmentTool(ctx))(baseInput)) as {
+      ok: false
+      error: string
+    }
+    expect(result.ok).toBe(false)
+    expect(result.error).toBe('calcom_not_configured')
+    expect(rpcCalls).toHaveLength(0)
+  })
 })

@@ -4,7 +4,10 @@ import type { ToolContext } from '../types.js'
 
 const InputSchema = z.object({
   appointmentId: z.string().uuid(),
-  newStartAt: z.string().describe('Novo início ISO 8601 UTC. Use slot retornado por check_availability.'),
+  newStartAt: z
+    .string()
+    .datetime({ offset: true })
+    .describe('Novo início ISO 8601 UTC. Use slot retornado por check_availability.'),
   reason: z.string().max(500).optional(),
 })
 
@@ -76,17 +79,29 @@ export function buildRescheduleAppointmentTool(ctx: ToolContext) {
         }
       }
 
+      // Defesa: schema já valida ISO 8601, mas garantimos parsing antes do
+      // side-effect remoto pra evitar drift se um caller bypassar InputSchema.
+      const parsedNewStartAt = new Date(newStartAt)
+      if (Number.isNaN(parsedNewStartAt.getTime())) {
+        return {
+          ok: false as const,
+          error: 'invalid_new_start_at' as const,
+          message: 'Novo horário inválido.',
+        }
+      }
+      const normalizedNewStartAt = parsedNewStartAt.toISOString()
+
       // Step 1: Cal.com reschedule → novo uid.
-      const newBooking = await calcomClient.rescheduleBooking(apptRow.calcom_uid, newStartAt)
+      const newBooking = await calcomClient.rescheduleBooking(apptRow.calcom_uid, normalizedNewStartAt)
 
       // Step 2: UPDATE local. Preserva duração original.
       const oldDurationMs = new Date(apptRow.end_at).getTime() - new Date(apptRow.start_at).getTime()
-      const newEndAt = new Date(new Date(newStartAt).getTime() + oldDurationMs).toISOString()
+      const newEndAt = new Date(parsedNewStartAt.getTime() + oldDurationMs).toISOString()
 
       const { error: updErr } = await supabase
         .from('appointments')
         .update({
-          start_at: newStartAt,
+          start_at: normalizedNewStartAt,
           end_at: newEndAt,
           calcom_uid: newBooking.uid,
           calcom_booking_id: String(newBooking.id),
@@ -113,7 +128,7 @@ export function buildRescheduleAppointmentTool(ctx: ToolContext) {
       }
 
       // Step 3: system message.
-      const newLocal = new Date(newStartAt).toLocaleString('pt-BR', { timeZone: TZ_DEFAULT })
+      const newLocal = parsedNewStartAt.toLocaleString('pt-BR', { timeZone: TZ_DEFAULT })
       const reasonNote = reason ? ` Motivo: ${reason}` : ''
       await supabase.from('messages').insert({
         clinic_id: clinicId,
@@ -137,7 +152,7 @@ export function buildRescheduleAppointmentTool(ctx: ToolContext) {
           old_calcom_uid: apptRow.calcom_uid,
           new_calcom_uid: newBooking.uid,
           old_start_at: apptRow.start_at,
-          new_start_at: newStartAt,
+          new_start_at: normalizedNewStartAt,
           reason,
         },
       })
@@ -145,7 +160,7 @@ export function buildRescheduleAppointmentTool(ctx: ToolContext) {
       return {
         ok: true as const,
         appointmentId,
-        newStartAt,
+        newStartAt: normalizedNewStartAt,
         newCalcomUid: newBooking.uid,
         message: `Consulta remarcada para ${newLocal}.`,
       }

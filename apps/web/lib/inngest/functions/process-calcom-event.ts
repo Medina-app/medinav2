@@ -82,12 +82,23 @@ export type ProcessCalcomEventDeps = {
     newCalcomUid: string;
     newBookingId: number | undefined;
   }) => Promise<void>;
-  /** UPDATE calcom_webhook_events SET processed_at=NOW(), appointment_id=... */
+  /**
+   * Sucesso: UPDATE calcom_webhook_events SET processed_at=NOW(),
+   * appointment_id=...
+   * Throw se a row não existir ou o UPDATE falhar — observability crítica.
+   */
   markEventProcessed: (args: {
     eventId: string;
     appointmentId?: string;
-    errorMessage?: string;
   }) => Promise<void>;
+  /**
+   * Falha: UPDATE só `error_message` (NÃO seta processed_at). Inngest retry
+   * vai re-tentar; recordEvent na próxima vez vê processed_at IS NULL e
+   * reprocessa.
+   * Throw se UPDATE falhar — caller deve catch + log sem mascarar a
+   * exception original.
+   */
+  markEventFailed: (args: { eventId: string; errorMessage: string }) => Promise<void>;
 };
 
 export type ProcessCalcomEventResult = {
@@ -159,7 +170,17 @@ export async function processCalcomEventHandler(
     return result;
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    await deps.markEventProcessed({ eventId: evtRow.id, errorMessage: msg });
+    // markEventFailed pode throw se UPDATE falhar; capturamos pra não
+    // mascarar a exception original do handler.
+    try {
+      await deps.markEventFailed({ eventId: evtRow.id, errorMessage: msg });
+    } catch (markErr) {
+      // eslint-disable-next-line no-console
+      console.error(
+        '[process-calcom-event] markEventFailed swallowed (original error preserved):',
+        markErr,
+      );
+    }
     throw err;
   }
 }
@@ -362,21 +383,27 @@ function makeProcessCalcomEventDeps(): ProcessCalcomEventDeps {
       return data as { id: string } | null;
     },
     async upsertAppointment(args) {
+      // ON CONFLICT (clinic_id, calcom_uid) DO UPDATE — idempotência atômica
+      // contra retries do worker e race com tool confirm_appointment.
+      // Requer UNIQUE INDEX idx_appointments_clinic_calcom_uid_unique (0030).
       const { data, error } = await client
         .from('appointments')
-        .insert({
-          clinic_id: args.clinicId,
-          calcom_uid: args.calcomUid,
-          calcom_booking_id: args.bookingId ? String(args.bookingId) : null,
-          status: 'scheduled',
-          start_at: args.startAt,
-          end_at: args.endAt,
-          timezone: 'America/Sao_Paulo',
-          modality: 'in_person',
-          patient_id: args.patientId,
-          doctor_id: args.doctorId,
-          created_via: 'calcom_external',
-        })
+        .upsert(
+          {
+            clinic_id: args.clinicId,
+            calcom_uid: args.calcomUid,
+            calcom_booking_id: args.bookingId ? String(args.bookingId) : null,
+            status: 'scheduled',
+            start_at: args.startAt,
+            end_at: args.endAt,
+            timezone: 'America/Sao_Paulo',
+            modality: 'in_person',
+            patient_id: args.patientId,
+            doctor_id: args.doctorId,
+            created_via: 'calcom_external',
+          },
+          { onConflict: 'clinic_id,calcom_uid', ignoreDuplicates: false },
+        )
         .select('id')
         .single();
       if (error || !data) throw new Error(`upsertAppointment: ${error?.message ?? 'no data'}`);
@@ -405,14 +432,30 @@ function makeProcessCalcomEventDeps(): ProcessCalcomEventDeps {
       if (error) throw new Error(`updateAppointmentReschedule: ${error.message}`);
     },
     async markEventProcessed(args) {
-      await client
+      const { data, error } = await client
         .from('calcom_webhook_events')
         .update({
           processed_at: new Date().toISOString(),
           appointment_id: args.appointmentId ?? null,
-          error_message: args.errorMessage ?? null,
+          error_message: null,
         })
-        .eq('id', args.eventId);
+        .eq('id', args.eventId)
+        .select('id')
+        .maybeSingle();
+      if (error) throw new Error(`markEventProcessed: ${error.message}`);
+      if (!data) throw new Error(`markEventProcessed: event ${args.eventId} not found`);
+    },
+    async markEventFailed(args) {
+      // Não setamos processed_at: deixar NULL permite Inngest retry
+      // re-executar (recordEvent vê alreadyProcessed=false).
+      const { data, error } = await client
+        .from('calcom_webhook_events')
+        .update({ error_message: args.errorMessage })
+        .eq('id', args.eventId)
+        .select('id')
+        .maybeSingle();
+      if (error) throw new Error(`markEventFailed: ${error.message}`);
+      if (!data) throw new Error(`markEventFailed: event ${args.eventId} not found`);
     },
   };
 }

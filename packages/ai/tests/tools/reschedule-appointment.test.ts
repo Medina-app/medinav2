@@ -88,7 +88,8 @@ describe('reschedule_appointment tool', () => {
     }
     expect(result.ok).toBe(true)
     expect(result.newCalcomUid).toBe('new-cal-uid')
-    expect(client.rescheduleBooking).toHaveBeenCalledWith('old-cal-uid', '2026-06-02T14:00:00Z')
+    // newStartAt é normalizado via toISOString() — aceita formato com ms.
+    expect(client.rescheduleBooking).toHaveBeenCalledWith('old-cal-uid', '2026-06-02T14:00:00.000Z')
 
     const apptUpdate = updateCalls.find((c) => c.table === 'appointments')
     expect(apptUpdate).toBeDefined()
@@ -98,7 +99,7 @@ describe('reschedule_appointment tool', () => {
       status: string
     }
     expect(payload.calcom_uid).toBe('new-cal-uid')
-    expect(payload.start_at).toBe('2026-06-02T14:00:00Z')
+    expect(payload.start_at).toBe('2026-06-02T14:00:00.000Z')
     expect(payload.status).toBe('rescheduled')
     expect(insertCalls.find((c) => c.table === 'messages')).toBeDefined()
     expect(insertCalls.find((c) => c.table === 'audit_logs')).toBeDefined()

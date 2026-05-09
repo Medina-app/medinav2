@@ -23,13 +23,16 @@ function jsonResponse(status: number, body: unknown): Response {
 
 describe('CalcomClient (AI-4)', () => {
   let fetchMock: ReturnType<typeof vi.fn>;
+  let originalFetch: typeof globalThis.fetch;
 
   beforeEach(() => {
+    originalFetch = globalThis.fetch;
     fetchMock = makeFetchMock();
     globalThis.fetch = fetchMock as unknown as typeof globalThis.fetch;
   });
 
   afterEach(() => {
+    globalThis.fetch = originalFetch;
     vi.useRealTimers();
   });
 

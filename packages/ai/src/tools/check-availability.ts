@@ -2,15 +2,40 @@ import { createTool } from '@mastra/core/tools'
 import { z } from 'zod'
 import type { ToolContext } from '../types.js'
 
-const InputSchema = z.object({
-  doctorId: z.string().uuid().describe('UUID do médico em doctors table.'),
-  dateFrom: z
-    .string()
-    .describe('Início do range a checar. ISO 8601 UTC (ex: 2026-06-01T00:00:00Z).'),
-  dateTo: z
-    .string()
-    .describe('Fim do range. ISO 8601 UTC. Mantenha < 7 dias pra resposta concisa.'),
-})
+const MAX_WINDOW_DAYS = 7
+const MAX_WINDOW_MS = MAX_WINDOW_DAYS * 24 * 60 * 60 * 1000
+
+const InputSchema = z
+  .object({
+    doctorId: z.string().uuid().describe('UUID do médico em doctors table.'),
+    dateFrom: z
+      .string()
+      .datetime({ offset: true })
+      .describe('Início do range a checar. ISO 8601 UTC (ex: 2026-06-01T00:00:00Z).'),
+    dateTo: z
+      .string()
+      .datetime({ offset: true })
+      .describe('Fim do range. ISO 8601 UTC. Mantenha < 7 dias pra resposta concisa.'),
+  })
+  .superRefine((val, ctx) => {
+    const from = Date.parse(val.dateFrom)
+    const to = Date.parse(val.dateTo)
+    if (!Number.isFinite(from) || !Number.isFinite(to)) return
+    if (from >= to) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['dateTo'],
+        message: 'dateTo deve ser estritamente maior que dateFrom.',
+      })
+    }
+    if (to - from > MAX_WINDOW_MS) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['dateTo'],
+        message: `Janela máxima é ${MAX_WINDOW_DAYS} dias.`,
+      })
+    }
+  })
 
 /**
  * AI-4: Read-only tool. Consulta Cal.com pra slots disponíveis do médico.

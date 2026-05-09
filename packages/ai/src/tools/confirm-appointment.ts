@@ -5,7 +5,10 @@ import type { ToolContext } from '../types.js'
 const InputSchema = z.object({
   doctorId: z.string().uuid(),
   patientId: z.string().uuid(),
-  startAt: z.string().describe('ISO 8601 UTC do início. Use slot retornado por check_availability.'),
+  startAt: z
+    .string()
+    .datetime({ offset: true })
+    .describe('ISO 8601 UTC do início. Use slot retornado por check_availability.'),
   durationMinutes: z.number().int().min(15).max(180).optional()
     .describe('Override consultation_duration_minutes do doctor. Em geral, deixa undefined.'),
   notes: z.string().max(500).optional(),
@@ -103,17 +106,30 @@ export function buildConfirmAppointmentTool(ctx: ToolContext) {
       // Email híbrida: real ou placeholder.
       const attendeeEmail = patient.email ?? `${patient.id}@whatsapp.medina.app`
 
+      // Defesa: schema já valida ISO 8601, mas garantimos parsing antes do
+      // side-effect remoto pra evitar booking órfão se um caller bypassar
+      // InputSchema.
+      const parsedStartAt = new Date(startAt)
+      if (Number.isNaN(parsedStartAt.getTime())) {
+        return {
+          ok: false as const,
+          error: 'invalid_start_at' as const,
+          message: 'Horário inválido.',
+        }
+      }
+      const normalizedStartAt = parsedStartAt.toISOString()
+
       // Step 1: Cal.com createBooking.
       const booking = await calcomClient.createBooking({
         eventTypeId,
-        start: startAt,
+        start: normalizedStartAt,
         attendee: { email: attendeeEmail, name: patient.full_name, timeZone: TZ_DEFAULT },
         metadata: { conversationId, source: 'medina_agent' },
       })
 
       // Step 2: INSERT appointment local. Compensação se falhar.
       const duration = durationMinutes ?? doctor.consultation_duration_minutes
-      const endAt = new Date(new Date(startAt).getTime() + duration * 60_000).toISOString()
+      const endAt = new Date(parsedStartAt.getTime() + duration * 60_000).toISOString()
 
       const { data: apptInserted, error: insErr } = await supabase
         .from('appointments')
@@ -123,7 +139,7 @@ export function buildConfirmAppointmentTool(ctx: ToolContext) {
           patient_id: patientId,
           conversation_id: conversationId,
           status: 'scheduled',
-          start_at: startAt,
+          start_at: normalizedStartAt,
           end_at: endAt,
           timezone: TZ_DEFAULT,
           modality: 'in_person',
@@ -149,7 +165,7 @@ export function buildConfirmAppointmentTool(ctx: ToolContext) {
       const appointmentId = (apptInserted as { id: string }).id
 
       // Step 3: system message "📅 agendada".
-      const startLocal = new Date(startAt).toLocaleString('pt-BR', { timeZone: TZ_DEFAULT })
+      const startLocal = parsedStartAt.toLocaleString('pt-BR', { timeZone: TZ_DEFAULT })
       await supabase.from('messages').insert({
         clinic_id: clinicId,
         conversation_id: conversationId,
@@ -173,7 +189,7 @@ export function buildConfirmAppointmentTool(ctx: ToolContext) {
           calcom_booking_id: booking.id,
           doctor_id: doctorId,
           patient_id: patientId,
-          start_at: startAt,
+          start_at: normalizedStartAt,
         },
       })
 
@@ -181,7 +197,7 @@ export function buildConfirmAppointmentTool(ctx: ToolContext) {
         ok: true as const,
         appointmentId,
         calcomUid: booking.uid,
-        startAt,
+        startAt: normalizedStartAt,
         endAt,
         doctorName: doctor.full_name,
         message: `Consulta confirmada para ${startLocal} com ${doctor.full_name}.`,

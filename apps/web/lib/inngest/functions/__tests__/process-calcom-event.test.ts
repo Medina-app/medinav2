@@ -19,6 +19,7 @@ function makeDeps(overrides: Partial<ProcessCalcomEventDeps> = {}): ProcessCalco
     updateAppointmentStatus: vi.fn().mockResolvedValue(undefined),
     updateAppointmentReschedule: vi.fn().mockResolvedValue(undefined),
     markEventProcessed: vi.fn().mockResolvedValue(undefined),
+    markEventFailed: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };
 }
@@ -195,7 +196,7 @@ describe('processCalcomEventHandler', () => {
     expect(deps.updateAppointmentStatus).not.toHaveBeenCalled();
   });
 
-  it('error mid-handler → markEventProcessed com error_message + re-throw', async () => {
+  it('error mid-handler → markEventFailed (sem processed_at) + re-throw original', async () => {
     const deps = makeDeps({
       findAppointment: vi.fn().mockResolvedValue({
         id: 'appt-1',
@@ -211,9 +212,41 @@ describe('processCalcomEventHandler', () => {
         deps,
       ),
     ).rejects.toThrow('rpc failed');
-    expect(deps.markEventProcessed).toHaveBeenCalledWith({
+    expect(deps.markEventFailed).toHaveBeenCalledWith({
       eventId: 'evt-1',
       errorMessage: expect.stringContaining('rpc failed'),
     });
+    expect(deps.markEventProcessed).not.toHaveBeenCalled();
+  });
+
+  it('markEventFailed throw não mascarar a exception original', async () => {
+    const deps = makeDeps({
+      findAppointment: vi.fn().mockResolvedValue({
+        id: 'appt-1',
+        clinic_id: 'clinic-A',
+        status: 'scheduled',
+      }),
+      updateAppointmentStatus: vi.fn().mockRejectedValue(new Error('rpc failed')),
+      markEventFailed: vi.fn().mockRejectedValue(new Error('UPDATE failed')),
+    });
+    await expect(
+      processCalcomEventHandler(
+        baseEvent({ triggerEvent: 'BOOKING_CONFIRMED' }),
+        fakeStep,
+        deps,
+      ),
+    ).rejects.toThrow('rpc failed');
+  });
+
+  it('happy path: markEventProcessed sem errorMessage', async () => {
+    const deps = makeDeps({
+      findPatientByEmail: vi.fn().mockResolvedValue({ id: 'pat-1' }),
+    });
+    await processCalcomEventHandler(baseEvent(), fakeStep, deps);
+    expect(deps.markEventProcessed).toHaveBeenCalledWith({
+      eventId: 'evt-1',
+      appointmentId: 'appt-NEW',
+    });
+    expect(deps.markEventFailed).not.toHaveBeenCalled();
   });
 });
