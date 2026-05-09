@@ -2,6 +2,27 @@ import type { Agent } from '@mastra/core/agent'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { GuardrailsConfig } from './guardrails/types.js'
 
+/** AI-4: minimal Cal.com client interface — concrete impl em
+ * `@medina/integrations-calcom`. Tools fazem dep injection via ToolContext;
+ * agent-factory instancia o client quando clinic_integrations Cal.com
+ * ativa existir. Tipo via interface evita @medina/ai → @medina/integrations
+ * dep cíclica. */
+export interface CalcomClientLike {
+  getAvailability(args: {
+    eventTypeId: number
+    startTime: string
+    endTime: string
+  }): Promise<Array<{ start: string; end: string }>>
+  createBooking(input: {
+    eventTypeId: number
+    start: string
+    attendee: { email: string; name: string; timeZone: string }
+    metadata?: Record<string, unknown>
+  }): Promise<{ id: number; uid: string; startTime: string; endTime: string }>
+  cancelBooking(uid: string, cancellationReason: string): Promise<void>
+  rescheduleBooking(uid: string, newStart: string): Promise<{ id: number; uid: string }>
+}
+
 export interface AgentConfig {
   id: string
   clinicId: string
@@ -48,6 +69,13 @@ export interface ToolContext {
    *  cai pro DEFAULT_THRESHOLD_FALLBACK em search-kb.ts (back-compat). */
   kbSimilarityThreshold?: number
   supabase: SupabaseClient
+  /** AI-4: Cal.com client instance — undefined quando clinic_integrations
+   *  Cal.com não existe / está disabled. Tools Cal.com checkam presença e
+   *  retornam erro estruturado (não throw) se ausente. */
+  calcomClient?: CalcomClientLike
+  /** AI-4: default eventTypeId pra clinic — fallback quando doctor.calcom_event_type_ids[0]
+   *  ausente. Vem de clinic_integrations.config.default_event_type_id. */
+  calcomDefaultEventTypeId?: number
 }
 
 export interface AgentResponse {
