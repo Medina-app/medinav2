@@ -3,14 +3,24 @@
   "version": "0.0.1",
   "private": true,
   "type": "module",
-  "exports": { ".": "./src/adapter.ts" },
-  "scripts": { "typecheck": "tsc --noEmit" },
+  "exports": {
+    ".": "./src/adapter.ts",
+    "./client": "./src/client.ts",
+    "./types": "./src/types.ts",
+    "./errors": "./src/errors.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
   "dependencies": {
     "@medina/db": "workspace:*",
-    "@medina/integrations-core": "workspace:*"
+    "@medina/integrations-core": "workspace:*",
+    "zod": "^3"
   },
   "devDependencies": {
     "@types/node": "^22",
-    "typescript": "^5"
+    "typescript": "^5",
+    "vitest": "^3.1.3"
   }
 }
