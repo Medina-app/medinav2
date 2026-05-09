@@ -81,6 +81,26 @@ describe('processCalcomEventHandler', () => {
     );
   });
 
+  it('BOOKING_CREATED sem attendees: cria appointment com patientId=null e sem lookup', async () => {
+    const deps = makeDeps();
+    const evt = baseEvent({
+      payload: {
+        uid: 'cal-uid-1',
+        bookingId: 999,
+        eventTypeId: 42,
+        startTime: '2026-06-01T10:00:00Z',
+        endTime: '2026-06-01T10:30:00Z',
+        attendees: [],
+      },
+    });
+    const result = await processCalcomEventHandler(evt, fakeStep, deps);
+    expect(result.action).toBe('inserted');
+    expect(deps.findPatientByEmail).not.toHaveBeenCalled();
+    expect(deps.upsertAppointment).toHaveBeenCalledWith(
+      expect.objectContaining({ patientId: null }),
+    );
+  });
+
   it('BOOKING_CREATED replay (alreadyProcessed) → skipped sem chamar upsert', async () => {
     const deps = makeDeps({
       recordEvent: vi.fn().mockResolvedValue({ id: 'evt-1', alreadyProcessed: true }),
@@ -120,6 +140,13 @@ describe('processCalcomEventHandler', () => {
     );
     expect(result.action).toBe('no_match');
     expect(deps.updateAppointmentStatus).not.toHaveBeenCalled();
+    // markEventProcessed é chamado mesmo no no_match — evita reprocessamento
+    // futuro quando o appointment não existe (Cal.com pode mandar
+    // BOOKING_CONFIRMED pra booking criado fora do Medina).
+    expect(deps.markEventProcessed).toHaveBeenCalledWith({
+      eventId: 'evt-1',
+      appointmentId: undefined,
+    });
   });
 
   it('BOOKING_RESCHEDULED: lookup por rescheduleUid + UPDATE start/end + new uid', async () => {

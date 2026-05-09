@@ -98,6 +98,10 @@ export async function resolveCalcomConfig(
   const apiKey = obj['api_key']
   const baseUrl = obj['base_url']
   if (typeof apiKey !== 'string' || typeof baseUrl !== 'string') return null
+  // Fail-safe: api_key vazio/whitespace = credencial inválida. Sem essa
+  // checagem, dispatcher constrói client e só falha em runtime na 1ª chamada
+  // ao Cal.com — clínica parece "configurada" mas está quebrada.
+  if (apiKey.trim().length === 0) return null
   if (!isValidCalcomBaseUrl(baseUrl)) return null
 
   const defaultEventTypeId =

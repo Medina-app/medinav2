@@ -109,7 +109,9 @@ export function buildCancelAppointmentTool(ctx: ToolContext) {
 
       if (rpcErr) {
         // Audit partial_failure pra debug (Cal.com cancelou mas local falhou).
-        await supabase.from('audit_logs').insert({
+        // Se até o audit fail, propagamos o erro combinado — sem visibilidade
+        // do drift, o sistema está degradado e não pode silenciar.
+        const { error: partialAuditErr } = await supabase.from('audit_logs').insert({
           clinic_id: clinicId,
           user_id: null,
           action: 'agent.tool.cancel_appointment.partial_failure',
@@ -121,6 +123,11 @@ export function buildCancelAppointmentTool(ctx: ToolContext) {
             reason,
           },
         })
+        if (partialAuditErr) {
+          throw new Error(
+            `cancel_appointment: partial_failure audit insert: ${partialAuditErr.message}; original rpc error: ${rpcErr.message}`,
+          )
+        }
         throw new Error(`cancel_appointment: db transition: ${rpcErr.message}`)
       }
 
