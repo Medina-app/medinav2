@@ -95,14 +95,21 @@ export async function resolveCalcomConfig(
 
   if (typeof parsed !== 'object' || parsed === null) return null
   const obj = parsed as Record<string, unknown>
-  const apiKey = obj['api_key']
-  const baseUrl = obj['base_url']
-  if (typeof apiKey !== 'string' || typeof baseUrl !== 'string') return null
-  // Fail-safe: api_key vazio/whitespace = credencial inválida. Sem essa
-  // checagem, dispatcher constrói client e só falha em runtime na 1ª chamada
-  // ao Cal.com — clínica parece "configurada" mas está quebrada.
-  if (apiKey.trim().length === 0) return null
-  if (!isValidCalcomBaseUrl(baseUrl)) return null
+  const apiKeyRaw = obj['api_key']
+  const baseUrlRaw = obj['base_url']
+  if (typeof apiKeyRaw !== 'string' || typeof baseUrlRaw !== 'string') return null
+
+  // Normaliza antes de validar e retornar — evita que credencial com
+  // whitespace passe da allowlist mas quebre na 1ª chamada (header inválido
+  // ou URL ill-formed).
+  const apiKey = apiKeyRaw.trim()
+  const baseUrlTrimmed = baseUrlRaw.trim()
+  if (apiKey.length === 0) return null
+  if (!isValidCalcomBaseUrl(baseUrlTrimmed)) return null
+  // Canonical form: origin (sem path/trailing slash). Garante que retornos
+  // de diferentes encrypted_credentials variantes ("https://cal.medina.app"
+  // vs "https://cal.medina.app/") produzem mesma config.
+  const baseUrl = new URL(baseUrlTrimmed).origin
 
   const defaultEventTypeId =
     typeof obj['default_event_type_id'] === 'number'

@@ -109,6 +109,9 @@ describe('processCalcomEventHandler', () => {
     expect(result.action).toBe('skipped');
     expect(result.reason).toBe('already_processed');
     expect(deps.upsertAppointment).not.toHaveBeenCalled();
+    // Idempotência forte: nenhuma escrita secundária no replay.
+    expect(deps.markEventProcessed).not.toHaveBeenCalled();
+    expect(deps.markEventFailed).not.toHaveBeenCalled();
   });
 
   it('BOOKING_CONFIRMED: UPDATE status=confirmed', async () => {
@@ -146,6 +149,33 @@ describe('processCalcomEventHandler', () => {
     expect(deps.markEventProcessed).toHaveBeenCalledWith({
       eventId: 'evt-1',
       appointmentId: undefined,
+    });
+  });
+
+  it('BOOKING_RESCHEDULED sem rescheduleUid: fallback lookup por uid', async () => {
+    const deps = makeDeps({
+      findAppointment: vi.fn().mockResolvedValue({
+        id: 'appt-1',
+        clinic_id: 'clinic-A',
+        status: 'scheduled',
+      }),
+    });
+    const evt = baseEvent({
+      triggerEvent: 'BOOKING_RESCHEDULED',
+      uid: 'NEW-uid',
+      payload: {
+        uid: 'NEW-uid',
+        bookingId: 1000,
+        startTime: '2026-06-02T10:00:00Z',
+        endTime: '2026-06-02T10:30:00Z',
+        attendees: [],
+      },
+    });
+    await processCalcomEventHandler(evt, fakeStep, deps);
+    // Sem rescheduleUid → cai no fallback `uid` próprio do payload.
+    expect(deps.findAppointment).toHaveBeenCalledWith({
+      clinicId: 'clinic-A',
+      calcomUid: 'NEW-uid',
     });
   });
 
