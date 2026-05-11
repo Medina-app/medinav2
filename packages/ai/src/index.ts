@@ -15,6 +15,34 @@ export {
 } from './calcom-config.js'
 export { chunkMarkdown, approxTokens, CHUNK_CHAR_LIMIT } from './kb-chunking.js'
 export {
+  createFactsExtractor,
+  type FactsExtractor,
+  type ExtractInput,
+  type ExtractFactsOpts,
+} from './patient-memory/extractor.js'
+export {
+  loadPatientFacts,
+  upsertFacts,
+  forgetFacts,
+  touchFacts,
+  type UpsertResult,
+  type UpsertSourceIds,
+} from './patient-memory/store.js'
+export { buildPatientFactsContext } from './patient-memory/context.js'
+export {
+  ALLOWED_KEYS,
+  MEDICAL_BLOCKLIST_RE,
+  FactCategorySchema,
+  ExtractedFactSchema,
+  ExtractionOutputSchema,
+  parseAiMemoryConfig,
+  DEFAULT_AI_MEMORY_CONFIG,
+  type FactCategory,
+  type ExtractedFact,
+  type PatientFact,
+  type AiMemoryConfig,
+} from './patient-memory/types.js'
+export {
   parseDocument,
   KB_SUPPORTED_FORMATS,
   type ParseDocumentArgs,

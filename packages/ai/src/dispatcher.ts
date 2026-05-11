@@ -12,6 +12,9 @@ import { createHaikuClassifier } from './guardrails/haiku-classifier.js'
 import { sanitizeEvidence } from './guardrails/sanitize.js'
 import type { EscalatedReason, GuardrailsConfig } from './guardrails/types.js'
 import { resolveCalcomConfig, type CalcomClientBuilder } from './calcom-config.js'
+import { loadPatientFacts, touchFacts } from './patient-memory/store.js'
+import { buildPatientFactsContext } from './patient-memory/context.js'
+import { parseAiMemoryConfig, type FactCategory, type PatientFact } from './patient-memory/types.js'
 
 const HISTORY_LIMIT = 20
 /** Cap the agent loop. AI-SDK default is 1 (single-shot), which would prevent
@@ -45,6 +48,10 @@ export interface DispatchResult {
   traceId: string | null
   tokensIn: number
   tokensOut: number
+  /** AI-6: true se este dispatch escalou (urgency / pre-filter / post-filter exhausted /
+   *  tool escalate_to_human). Caller (Inngest dispatch-ai-agent) usa pra disparar
+   *  extract-patient-facts no fim da conversa. */
+  didEscalate: boolean
 }
 
 interface ChatMessage {
@@ -161,6 +168,43 @@ export async function dispatchAgent(args: DispatchAgentArgs): Promise<DispatchRe
     (cfg as { guardrails?: GuardrailsConfig }).guardrails ?? {}
   const lastUserContent =
     messages.filter((m) => m.role === 'user').at(-1)?.content ?? ''
+
+  // ─── AI-6: load patient facts for memory injection ──────────────────────────
+  // Reads clinics.metadata->'ai_memory' to decide. Failure to load is
+  // non-fatal — memory is best-effort, dispatch must not break if facts
+  // table is unreachable or metadata malformed.
+  let patientFactsContext = ''
+  let loadedFactIds: readonly string[] = []
+  if (conv.patient_id) {
+    try {
+      const { data: clinic } = await supabase
+        .from('clinics')
+        .select('metadata')
+        .eq('id', clinicId)
+        .single()
+      const memoryConfig = parseAiMemoryConfig(
+        (clinic as { metadata?: { ai_memory?: unknown } } | null)?.metadata?.ai_memory,
+      )
+      if (memoryConfig.enabled && memoryConfig.categories.length > 0) {
+        const enabledSet = new Set<FactCategory>(memoryConfig.categories)
+        const allFacts = await loadPatientFacts(supabase, clinicId, conv.patient_id)
+        const facts: PatientFact[] = allFacts.filter((f) => enabledSet.has(f.category))
+        patientFactsContext = buildPatientFactsContext(facts)
+        loadedFactIds = facts.map((f) => f.id)
+      }
+    } catch {
+      // Memory load failure must not break dispatch. Silenciado.
+    }
+  }
+  if (patientFactsContext.length > 0) {
+    messages.unshift(
+      {
+        role: 'user',
+        content: `[SISTEMA-INTERNO] Você tem memória deste paciente:\n${patientFactsContext}\nUse esses fatos administrativos ao responder, mas NÃO mencione "memória" ou "lembro" — apenas trate o paciente naturalmente.`,
+      },
+      { role: 'assistant', content: 'Entendido. Vou considerar esses fatos ao responder.' },
+    )
+  }
 
   // 4. Build tools bound to this dispatch context, then construct the agent.
   //    knowledge_document_ids is AI-3 wiring: search_kb reads it from ToolContext
@@ -287,6 +331,7 @@ export async function dispatchAgent(args: DispatchAgentArgs): Promise<DispatchRe
             traceId: trace?.id ?? null,
             tokensIn: 0,
             tokensOut: 0,
+            didEscalate: true,
           }
         }
 
@@ -318,6 +363,7 @@ export async function dispatchAgent(args: DispatchAgentArgs): Promise<DispatchRe
             traceId: trace?.id ?? null,
             tokensIn: 0,
             tokensOut: 0,
+            didEscalate: true,
           }
         }
       }
@@ -349,6 +395,12 @@ export async function dispatchAgent(args: DispatchAgentArgs): Promise<DispatchRe
       let result
       try {
         result = await agent.generate(messages, generateOpts)
+        // AI-6: facts foram consumidos pelo LLM — atualiza last_referenced_at
+        // pra prevenir expiry de 6 meses. Fire-and-forget; erros silenciados.
+        // Roda APÓS generate succeed pra evitar refresh em vão se LLM falhar.
+        if (loadedFactIds.length > 0) {
+          void touchFacts(supabase, clinicId, loadedFactIds).catch(() => {})
+        }
         try {
           generation?.end?.({
             output: (result as { text?: string }).text ?? '',
@@ -411,6 +463,7 @@ export async function dispatchAgent(args: DispatchAgentArgs): Promise<DispatchRe
             traceId: trace?.id ?? null,
             tokensIn: usage.inputTokens ?? 0,
             tokensOut: usage.outputTokens ?? 0,
+            didEscalate: true,
           }
         }
 
@@ -490,6 +543,7 @@ export async function dispatchAgent(args: DispatchAgentArgs): Promise<DispatchRe
         traceId: trace?.id ?? null,
         tokensIn: usage.inputTokens ?? 0,
         tokensOut: usage.outputTokens ?? 0,
+        didEscalate: escalated,
       }
     },
   )

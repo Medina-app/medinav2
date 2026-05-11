@@ -7,6 +7,7 @@ const items = [
   { label: 'Geral', href: 'general' },
   { label: 'Membros', href: 'members' },
   { label: 'Integrações', href: 'integrations' },
+  { label: 'Memória da IA', href: 'ai-memory' },
 ]
 
 export function SettingsNav({ slug }: { slug: string }) {
