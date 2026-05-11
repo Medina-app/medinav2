@@ -204,9 +204,6 @@ export async function dispatchAgent(args: DispatchAgentArgs): Promise<DispatchRe
       },
       { role: 'assistant', content: 'Entendido. Vou considerar esses fatos ao responder.' },
     )
-    // Fire-and-forget: bump last_referenced_at pros facts injetados. Erros
-    // silenciados dentro de touchFacts; .catch aqui só pra satisfy no-floating-promises.
-    void touchFacts(supabase, loadedFactIds).catch(() => {})
   }
 
   // 4. Build tools bound to this dispatch context, then construct the agent.
@@ -398,6 +395,12 @@ export async function dispatchAgent(args: DispatchAgentArgs): Promise<DispatchRe
       let result
       try {
         result = await agent.generate(messages, generateOpts)
+        // AI-6: facts foram consumidos pelo LLM — atualiza last_referenced_at
+        // pra prevenir expiry de 6 meses. Fire-and-forget; erros silenciados.
+        // Roda APÓS generate succeed pra evitar refresh em vão se LLM falhar.
+        if (loadedFactIds.length > 0) {
+          void touchFacts(supabase, loadedFactIds).catch(() => {})
+        }
         try {
           generation?.end?.({
             output: (result as { text?: string }).text ?? '',

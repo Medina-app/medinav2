@@ -21,14 +21,21 @@ export function ForgetFactButton({ patientId, category, label }: Props) {
     if (!confirm(confirmMsg)) return
 
     startTransition(async () => {
-      const result = await forgetPatientFactsAction({
-        patientId,
-        ...(category ? { category } : {}),
-      })
-      if (result.error) {
-        toast.error(result.error)
-      } else {
-        toast.success(`Memória apagada (${result.count ?? 0} fatos).`)
+      try {
+        const result = await forgetPatientFactsAction({
+          patientId,
+          ...(category ? { category } : {}),
+        })
+        if (result.error) {
+          toast.error(result.error)
+        } else {
+          toast.success(`Memória apagada (${result.count ?? 0} fatos).`)
+        }
+      } catch (err) {
+        // Exception não-tratada (network, etc) — UX-friendly toast em vez de silêncio.
+        toast.error(
+          err instanceof Error ? `Erro: ${err.message}` : 'Erro ao apagar memória.',
+        )
       }
     })
   }

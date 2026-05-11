@@ -1,7 +1,6 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import {
   createFactsExtractor,
-  loadPatientFacts,
   upsertFacts,
   parseAiMemoryConfig,
   type FactsExtractor,
@@ -111,18 +110,16 @@ export async function extractPatientFactsHandler(
   const enabledCategories = new Set<FactCategory>(memoryConfig.categories);
   const facts = await extractor({ messages, categories: enabledCategories });
 
-  // 5. Capture pre-state to differentiate inserted vs updated.
-  const before = await loadPatientFacts(supabase, clinicId, conv.patient_id);
-  const beforeKeys = new Set(before.map((f) => `${f.category}::${f.key}`));
+  // 5. Persist via RPC. xmax-based detection retorna inserted/updated reais.
+  const { inserted, updated } = await upsertFacts(
+    supabase,
+    clinicId,
+    conv.patient_id,
+    facts,
+    { conversationId },
+  );
 
-  const { inserted } = await upsertFacts(supabase, clinicId, conv.patient_id, facts, {
-    conversationId,
-  });
-
-  const updated = facts.filter((f) => beforeKeys.has(`${f.category}::${f.key}`)).length;
-  const newlyInserted = Math.max(inserted - updated, 0);
-
-  return { inserted: newlyInserted, updated, total: facts.length };
+  return { inserted, updated, total: facts.length };
 }
 
 // ─── Production wiring ───────────────────────────────────────────────────

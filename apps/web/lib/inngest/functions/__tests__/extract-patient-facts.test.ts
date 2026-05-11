@@ -21,7 +21,7 @@ function makeSupabase(opts: {
   conversation?: Conversation | null;
   history?: Array<{ content: string | null; sender_type: string; created_at: string }>;
   existingFacts?: Array<Record<string, unknown>>;
-  upsertResult?: Array<{ id: string }>;
+  upsertRpcResult?: { inserted: number; updated: number };
 } = {}) {
   const clinicSingle = vi.fn().mockResolvedValue({
     data: opts.clinicMetadata !== undefined ? { metadata: opts.clinicMetadata } : null,
@@ -55,23 +55,22 @@ function makeSupabase(opts: {
   const factsEqClinic = vi.fn().mockReturnValue({ eq: factsEqPatient });
   const factsSelect = vi.fn().mockReturnValue({ eq: factsEqClinic });
 
-  const upsertResultSelect = vi.fn().mockResolvedValue({
-    data: opts.upsertResult ?? [],
-    error: null,
-  });
-  const upsertFn = vi.fn().mockReturnValue({ select: upsertResultSelect });
-
   const from = vi.fn().mockImplementation((table: string) => {
     if (table === 'clinics') return { select: clinicSelect };
     if (table === 'conversations') return { select: convSelect };
     if (table === 'messages') return { select: vi.fn().mockReturnValue({ eq: historyEq }) };
-    if (table === 'patient_facts') return { select: factsSelect, upsert: upsertFn };
+    if (table === 'patient_facts') return { select: factsSelect };
     throw new Error(`unmocked table: ${table}`);
   });
 
+  const rpc = vi.fn().mockResolvedValue({
+    data: opts.upsertRpcResult ?? { inserted: 0, updated: 0 },
+    error: null,
+  });
+
   return {
-    sb: { from } as unknown as SupabaseClient,
-    spies: { from, upsertFn, historyLimit, convSingle, clinicSingle, factsOrder },
+    sb: { from, rpc } as unknown as SupabaseClient,
+    spies: { from, rpc, historyLimit, convSingle, clinicSingle, factsOrder },
   };
 }
 
@@ -156,7 +155,7 @@ describe('extractPatientFactsHandler', () => {
     expect(result).toEqual({ skipped: 'no_messages' });
   });
 
-  it('chama extractor com categorias habilitadas + persiste facts via upsert', async () => {
+  it('chama extractor com categorias habilitadas + persiste facts via RPC upsert_patient_facts', async () => {
     const { sb, spies } = makeSupabase({
       clinicMetadata: {
         ai_memory: { enabled: true, categories: ['administrative', 'financial'] },
@@ -165,7 +164,7 @@ describe('extractPatientFactsHandler', () => {
       history: [
         { content: 'meu nome é João', sender_type: 'patient', created_at: '2026-05-11T10:00:00Z' },
       ],
-      upsertResult: [{ id: 'fact-1' }],
+      upsertRpcResult: { inserted: 1, updated: 0 },
     });
     const facts = [
       { category: 'administrative' as const, key: 'preferred_name', value: 'João', confidence: 0.9 },
@@ -185,11 +184,18 @@ describe('extractPatientFactsHandler', () => {
     expect(args.categories.has('administrative')).toBe(true);
     expect(args.categories.has('financial')).toBe(true);
 
-    expect(spies.upsertFn).toHaveBeenCalledTimes(1);
+    expect(spies.rpc).toHaveBeenCalledWith(
+      'upsert_patient_facts',
+      expect.objectContaining({
+        p_clinic_id: 'clinic-A',
+        p_patient_id: 'pat-1',
+        p_source_conversation_id: 'conv-1',
+      }),
+    );
     expect(result).toEqual({ inserted: 1, updated: 0, total: 1 });
   });
 
-  it('detecta updated quando fact com mesma (category,key) já existe', async () => {
+  it('detecta updated quando RPC retorna updated > 0 (mesma category,key)', async () => {
     const now = '2026-05-11T10:00:00Z';
     const { sb } = makeSupabase({
       clinicMetadata: {
@@ -197,23 +203,7 @@ describe('extractPatientFactsHandler', () => {
       },
       conversation: { id: 'conv-1', clinic_id: 'clinic-A', patient_id: 'pat-1' },
       history: [{ content: 'me chame de João', sender_type: 'patient', created_at: now }],
-      existingFacts: [
-        {
-          id: 'fact-existing',
-          clinic_id: 'clinic-A',
-          patient_id: 'pat-1',
-          category: 'administrative',
-          key: 'preferred_name',
-          value: 'Jô',
-          confidence: '0.8',
-          source_conversation_id: null,
-          source_message_id: null,
-          last_referenced_at: now,
-          created_at: now,
-          updated_at: now,
-        },
-      ],
-      upsertResult: [{ id: 'fact-existing' }],
+      upsertRpcResult: { inserted: 0, updated: 1 },
     });
     const facts = [
       { category: 'administrative' as const, key: 'preferred_name', value: 'João', confidence: 0.95 },
@@ -222,14 +212,14 @@ describe('extractPatientFactsHandler', () => {
     expect(result).toEqual({ inserted: 0, updated: 1, total: 1 });
   });
 
-  it('extractor retornando [] resulta em upsert no-op (sem chamar supabase upsert)', async () => {
+  it('extractor retornando [] resulta em upsert no-op (sem chamar RPC)', async () => {
     const { sb, spies } = makeSupabase({
       clinicMetadata: { ai_memory: { enabled: true, categories: ['administrative'] } },
       conversation: { id: 'conv-1', clinic_id: 'clinic-A', patient_id: 'pat-1' },
       history: [{ content: 'oi', sender_type: 'patient', created_at: '2026-05-11T10:00:00Z' }],
     });
     const result = await extractPatientFactsHandler(baseEvent, makeDeps(sb, []));
-    expect(spies.upsertFn).not.toHaveBeenCalled();
+    expect(spies.rpc).not.toHaveBeenCalled();
     expect(result).toEqual({ inserted: 0, updated: 0, total: 0 });
   });
 

@@ -73,8 +73,13 @@ export interface UpsertResult {
 }
 
 /**
- * Insert ou update facts via ON CONFLICT (clinic_id, patient_id, category, key).
+ * Insert ou update facts via RPC upsert_patient_facts (SECURITY DEFINER).
  * Service_role only — RLS bloqueia INSERT/UPDATE pra authenticated.
+ *
+ * Usa RPC ao invés de .upsert() direto porque PostgREST não suporta partial
+ * unique indexes (idx_patient_facts_unique_active tem WHERE deleted_at IS NULL).
+ * A RPC executa INSERT ... ON CONFLICT ... WHERE ... DO UPDATE corretamente
+ * e retorna {inserted, updated} via xmax detection.
  *
  * Caller é responsável por ter pré-filtrado facts (whitelist + blocklist) via
  * createFactsExtractor antes de chamar aqui.
@@ -90,32 +95,31 @@ export async function upsertFacts(
     return { inserted: 0, updated: 0 }
   }
 
-  const now = new Date().toISOString()
-  const rows = facts.map((f) => ({
-    clinic_id: clinicId,
-    patient_id: patientId,
-    category: f.category,
-    key: f.key,
-    value: f.value,
-    confidence: f.confidence,
-    source_conversation_id: source.conversationId,
-    source_message_id: source.messageId ?? null,
-    last_referenced_at: now,
-  }))
-
-  const { data, error } = await supabase
-    .from('patient_facts')
-    .upsert(rows, { onConflict: 'clinic_id,patient_id,category,key' })
-    .select('id')
+  const { data, error } = await supabase.rpc('upsert_patient_facts', {
+    p_clinic_id: clinicId,
+    p_patient_id: patientId,
+    p_source_conversation_id: source.conversationId,
+    p_source_message_id: source.messageId ?? null,
+    p_facts: facts.map((f) => ({
+      category: f.category,
+      key: f.key,
+      value: f.value,
+      confidence: f.confidence,
+    })),
+  })
 
   if (error) {
     throw new Error(`upsertFacts: ${error.message}`)
   }
 
-  // PostgREST não distingue insert vs update no count; aproximação: data.length
-  // total. Para métricas reais, comparar com loadPatientFacts antes/depois — fora
-  // do escopo da função.
-  return { inserted: data?.length ?? 0, updated: 0 }
+  const result = (data ?? { inserted: 0, updated: 0 }) as {
+    inserted?: number
+    updated?: number
+  }
+  return {
+    inserted: typeof result.inserted === 'number' ? result.inserted : 0,
+    updated: typeof result.updated === 'number' ? result.updated : 0,
+  }
 }
 
 /**

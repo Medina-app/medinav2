@@ -6,25 +6,31 @@ import type { ExtractedFact } from '../../src/patient-memory/types.js'
 function makeSupabase(opts: {
   rpcResult?: { data: unknown; error: unknown }
   selectResult?: { data: unknown; error: unknown }
-  upsertResult?: { data: unknown; error: unknown }
+  upsertRpcResult?: { data: unknown; error: unknown }
   updateResult?: { data: unknown; error: unknown }
 } = {}) {
-  const rpc = vi.fn().mockResolvedValue(opts.rpcResult ?? { data: 0, error: null })
+  // Both forget_patient_facts and upsert_patient_facts go through .rpc().
+  // Caller picks which result via mockResolvedValueOnce — but for tests that
+  // only call one of them, opts.rpcResult covers both paths. For tests that
+  // need different results, use opts.upsertRpcResult to override the next call.
+  const rpc = vi.fn().mockImplementation((name: string) => {
+    if (name === 'upsert_patient_facts' && opts.upsertRpcResult !== undefined) {
+      return Promise.resolve(opts.upsertRpcResult)
+    }
+    return Promise.resolve(opts.rpcResult ?? { data: 0, error: null })
+  })
 
   const orderFn = vi.fn().mockResolvedValue(opts.selectResult ?? { data: [], error: null })
-  const eqPatient = vi.fn().mockReturnValue({ is: vi.fn().mockReturnValue({ order: orderFn }) })
+  const isDeletedFn = vi.fn().mockReturnValue({ order: orderFn })
+  const eqPatient = vi.fn().mockReturnValue({ is: isDeletedFn })
   const eqClinic = vi.fn().mockReturnValue({ eq: eqPatient })
   const selectFn = vi.fn().mockReturnValue({ eq: eqClinic })
 
-  const upsertFn = vi.fn().mockReturnValue({
-    select: vi.fn().mockResolvedValue(opts.upsertResult ?? { data: [], error: null }),
-  })
   const inFn = vi.fn().mockResolvedValue(opts.updateResult ?? { data: null, error: null })
   const updateFn = vi.fn().mockReturnValue({ in: inFn })
 
   const fromFn = vi.fn().mockImplementation((_table: string) => ({
     select: selectFn,
-    upsert: upsertFn,
     update: updateFn,
   }))
 
@@ -35,7 +41,7 @@ function makeSupabase(opts: {
     selectFn,
     eqClinic,
     eqPatient,
-    upsertFn,
+    isDeletedFn,
     updateFn,
     inFn,
   }
@@ -90,9 +96,9 @@ describe('AI-6: forgetFacts', () => {
 })
 
 describe('AI-6: loadPatientFacts', () => {
-  it('seleciona apenas facts ativos da clínica + paciente', async () => {
+  it('seleciona apenas facts ativos da clínica + paciente (deleted_at IS NULL filter)', async () => {
     const now = '2026-05-11T10:00:00.000Z'
-    const { sb, fromFn, selectFn, eqClinic, eqPatient } = makeSupabase({
+    const { sb, fromFn, selectFn, eqClinic, eqPatient, isDeletedFn } = makeSupabase({
       selectResult: {
         data: [
           {
@@ -118,6 +124,9 @@ describe('AI-6: loadPatientFacts', () => {
     expect(selectFn).toHaveBeenCalled()
     expect(eqClinic).toHaveBeenCalledWith('clinic_id', 'clinic-A')
     expect(eqPatient).toHaveBeenCalledWith('patient_id', 'pat-1')
+    // CodeRabbit nitpick: garante que o soft-delete filter é aplicado — se removido,
+    // facts esquecidos vazariam pro dispatcher/inbox.
+    expect(isDeletedFn).toHaveBeenCalledWith('deleted_at', null)
     expect(facts).toHaveLength(1)
     expect(facts[0]).toMatchObject({
       id: 'fact-1',
@@ -142,43 +151,72 @@ describe('AI-6: loadPatientFacts', () => {
 })
 
 describe('AI-6: upsertFacts', () => {
-  it('chama upsert com onConflict pra (clinic_id, patient_id, category, key)', async () => {
-    const { sb, upsertFn } = makeSupabase({
-      upsertResult: { data: [{ id: 'fact-1' }], error: null },
+  it('chama RPC upsert_patient_facts com clinic + patient + source + facts jsonb', async () => {
+    const { sb, rpc } = makeSupabase({
+      upsertRpcResult: { data: { inserted: 1, updated: 0 }, error: null },
     })
     const facts: ExtractedFact[] = [
       { category: 'administrative', key: 'preferred_name', value: 'Jô', confidence: 0.9 },
     ]
-    await upsertFacts(sb, 'clinic-A', 'pat-1', facts, { conversationId: 'conv-1', messageId: 'msg-1' })
-    expect(upsertFn).toHaveBeenCalledTimes(1)
-    const args = upsertFn.mock.calls[0]
-    expect(args?.[0]).toEqual([
-      expect.objectContaining({
-        clinic_id: 'clinic-A',
-        patient_id: 'pat-1',
-        category: 'administrative',
-        key: 'preferred_name',
-        value: 'Jô',
-        confidence: 0.9,
-        source_conversation_id: 'conv-1',
-        source_message_id: 'msg-1',
-      }),
-    ])
-    expect(args?.[1]).toMatchObject({
-      onConflict: 'clinic_id,patient_id,category,key',
+    const result = await upsertFacts(sb, 'clinic-A', 'pat-1', facts, {
+      conversationId: 'conv-1',
+      messageId: 'msg-1',
     })
+    expect(rpc).toHaveBeenCalledWith('upsert_patient_facts', {
+      p_clinic_id: 'clinic-A',
+      p_patient_id: 'pat-1',
+      p_source_conversation_id: 'conv-1',
+      p_source_message_id: 'msg-1',
+      p_facts: [
+        {
+          category: 'administrative',
+          key: 'preferred_name',
+          value: 'Jô',
+          confidence: 0.9,
+        },
+      ],
+    })
+    expect(result).toEqual({ inserted: 1, updated: 0 })
   })
 
-  it('quando facts é vazio, não chama supabase e retorna {inserted:0, updated:0}', async () => {
-    const { sb, upsertFn } = makeSupabase()
+  it('quando facts é vazio, não chama RPC e retorna {inserted:0, updated:0}', async () => {
+    const { sb, rpc } = makeSupabase()
     const r = await upsertFacts(sb, 'clinic-A', 'pat-1', [], { conversationId: 'conv-1' })
-    expect(upsertFn).not.toHaveBeenCalled()
+    expect(rpc).not.toHaveBeenCalled()
     expect(r).toEqual({ inserted: 0, updated: 0 })
   })
 
-  it('propaga erro do supabase', async () => {
+  it('messageId opcional → p_source_message_id passa como null', async () => {
+    const { sb, rpc } = makeSupabase({
+      upsertRpcResult: { data: { inserted: 1, updated: 0 }, error: null },
+    })
+    await upsertFacts(
+      sb,
+      'clinic-A',
+      'pat-1',
+      [{ category: 'administrative', key: 'preferred_name', value: 'X', confidence: 0.9 }],
+      { conversationId: 'conv-1' },
+    )
+    expect(rpc).toHaveBeenCalledWith(
+      'upsert_patient_facts',
+      expect.objectContaining({ p_source_message_id: null }),
+    )
+  })
+
+  it('detecta inserted vs updated via xmax (RPC retorna ambos counts)', async () => {
     const { sb } = makeSupabase({
-      upsertResult: { data: null, error: { message: 'cross-tenant violation' } },
+      upsertRpcResult: { data: { inserted: 2, updated: 3 }, error: null },
+    })
+    const facts: ExtractedFact[] = [
+      { category: 'administrative', key: 'preferred_name', value: 'A', confidence: 0.9 },
+    ]
+    const result = await upsertFacts(sb, 'clinic-A', 'pat-1', facts, { conversationId: 'conv-1' })
+    expect(result).toEqual({ inserted: 2, updated: 3 })
+  })
+
+  it('propaga erro do RPC (ex: cross-tenant trigger violation)', async () => {
+    const { sb } = makeSupabase({
+      upsertRpcResult: { data: null, error: { message: 'cross-tenant violation' } },
     })
     await expect(
       upsertFacts(

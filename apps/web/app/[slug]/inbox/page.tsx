@@ -65,7 +65,7 @@ export default async function InboxPage({ searchParams }: InboxPageProps) {
           <EmptyState />
         )}
       </div>
-      <div className={`${convId ? 'hidden xl:block' : 'hidden xl:block'}`}>
+      <div className="hidden xl:block">
         <PatientFactsPanel
           facts={factsForPatient}
           patientId={detail?.patient?.id ?? null}
