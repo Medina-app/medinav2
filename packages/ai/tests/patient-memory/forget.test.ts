@@ -20,14 +20,20 @@ function makeSupabase(opts: {
     return Promise.resolve(opts.rpcResult ?? { data: 0, error: null })
   })
 
-  const orderFn = vi.fn().mockResolvedValue(opts.selectResult ?? { data: [], error: null })
-  const isDeletedFn = vi.fn().mockReturnValue({ order: orderFn })
+  // loadPatientFacts chain: .select().eq().eq().is().order('category').order('key')
+  // The terminal .order() resolves with the data; the first .order() returns
+  // a builder that exposes another .order(). Both calls share the same handler.
+  const orderKeyFn = vi.fn().mockResolvedValue(opts.selectResult ?? { data: [], error: null })
+  const orderCategoryFn = vi.fn().mockReturnValue({ order: orderKeyFn })
+  const isDeletedFn = vi.fn().mockReturnValue({ order: orderCategoryFn })
   const eqPatient = vi.fn().mockReturnValue({ is: isDeletedFn })
   const eqClinic = vi.fn().mockReturnValue({ eq: eqPatient })
   const selectFn = vi.fn().mockReturnValue({ eq: eqClinic })
 
   const inFn = vi.fn().mockResolvedValue(opts.updateResult ?? { data: null, error: null })
-  const updateFn = vi.fn().mockReturnValue({ in: inFn })
+  // touchFacts chain: .update(...).eq('clinic_id', X).in('id', factIds)
+  const updateEqFn = vi.fn().mockReturnValue({ in: inFn })
+  const updateFn = vi.fn().mockReturnValue({ eq: updateEqFn })
 
   const fromFn = vi.fn().mockImplementation((_table: string) => ({
     select: selectFn,
@@ -43,6 +49,7 @@ function makeSupabase(opts: {
     eqPatient,
     isDeletedFn,
     updateFn,
+    updateEqFn,
     inFn,
   }
 }
@@ -231,18 +238,19 @@ describe('AI-6: upsertFacts', () => {
 })
 
 describe('AI-6: touchFacts (fire-and-forget last_referenced_at update)', () => {
-  it('UPDATE patient_facts SET last_referenced_at = now() WHERE id IN factIds', async () => {
-    const { sb, updateFn, inFn } = makeSupabase()
-    await touchFacts(sb, ['fact-1', 'fact-2'])
+  it('UPDATE com clinic_id scope + id IN factIds (defense in depth cross-tenant)', async () => {
+    const { sb, updateFn, updateEqFn, inFn } = makeSupabase()
+    await touchFacts(sb, 'clinic-A', ['fact-1', 'fact-2'])
     expect(updateFn).toHaveBeenCalledWith(
       expect.objectContaining({ last_referenced_at: expect.any(String) })
     )
+    expect(updateEqFn).toHaveBeenCalledWith('clinic_id', 'clinic-A')
     expect(inFn).toHaveBeenCalledWith('id', ['fact-1', 'fact-2'])
   })
 
   it('quando factIds é vazio, não chama supabase', async () => {
     const { sb, updateFn } = makeSupabase()
-    await touchFacts(sb, [])
+    await touchFacts(sb, 'clinic-A', [])
     expect(updateFn).not.toHaveBeenCalled()
   })
 
@@ -250,6 +258,6 @@ describe('AI-6: touchFacts (fire-and-forget last_referenced_at update)', () => {
     const { sb } = makeSupabase({
       updateResult: { data: null, error: { message: 'transient' } },
     })
-    await expect(touchFacts(sb, ['fact-1'])).resolves.toBeUndefined()
+    await expect(touchFacts(sb, 'clinic-A', ['fact-1'])).resolves.toBeUndefined()
   })
 })

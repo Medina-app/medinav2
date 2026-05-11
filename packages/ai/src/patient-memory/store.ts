@@ -55,6 +55,7 @@ export async function loadPatientFacts(
     .eq('patient_id', patientId)
     .is('deleted_at', null)
     .order('category', { ascending: true })
+    .order('key', { ascending: true })
 
   if (error) {
     throw new Error(`loadPatientFacts: ${error.message}`)
@@ -148,15 +149,22 @@ export async function forgetFacts(
  * Fire-and-forget: atualiza last_referenced_at pros facts usados no contexto.
  * Service_role only. Erros são silenciados — touch failure não pode quebrar
  * dispatch.
+ *
+ * Defense in depth: filtra por clinic_id mesmo o caller (dispatcher) só
+ * passando IDs vindos de loadPatientFacts(clinicId). Se um caller futuro
+ * misturar IDs de outras clínicas por bug, o WHERE clinic_id=$1 ainda
+ * previne mutação cross-tenant.
  */
 export async function touchFacts(
   supabase: SupabaseClient,
+  clinicId: string,
   factIds: ReadonlyArray<string>,
 ): Promise<void> {
   if (factIds.length === 0) return
   await supabase
     .from('patient_facts')
     .update({ last_referenced_at: new Date().toISOString() })
+    .eq('clinic_id', clinicId)
     .in('id', factIds as string[])
   // Não throw mesmo em erro — fire-and-forget.
 }

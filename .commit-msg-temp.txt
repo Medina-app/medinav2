@@ -1,0 +1,27 @@
+fix(ai): CodeRabbit round 2 — touchFacts tenant scope + load order
+
+Round 2 retornou 1 actionable + 1 nitpick. Ambos aplicados.
+
+Actionable:
+- touchFacts: assinatura agora exige clinicId. Adiciona .eq('clinic_id', X)
+  antes do .in('id', factIds). Defense in depth — atual caller (dispatcher)
+  só passa IDs vindos de loadPatientFacts(clinicId), mas se um caller futuro
+  misturar IDs de outras clínicas por bug, o WHERE clinic_id previne mutação
+  cross-tenant.
+
+Nitpick:
+- loadPatientFacts: chain .order('key', { ascending: true }) após order
+  'category'. Match com comentário "categoria → key". Resultado determinístico
+  via SQL em vez de depender só do .sort() em buildPatientFactsContext.
+
+Tests:
+- forget.test.ts: mock supabase atualizado pra suportar chain duplo
+  .order().order() em loadPatientFacts; mock .update().eq().in() em touchFacts.
+  Assertion adicionada: expect(updateEqFn).toHaveBeenCalledWith('clinic_id', 'clinic-A').
+- Dispatcher call site atualizado: touchFacts(supabase, clinicId, factIds).
+
+Verificação:
+- 763 tests passing (zero change in count)
+- typecheck verde em 10 packages
+
+Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>

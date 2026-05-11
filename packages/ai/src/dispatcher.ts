@@ -399,7 +399,7 @@ export async function dispatchAgent(args: DispatchAgentArgs): Promise<DispatchRe
         // pra prevenir expiry de 6 meses. Fire-and-forget; erros silenciados.
         // Roda APÓS generate succeed pra evitar refresh em vão se LLM falhar.
         if (loadedFactIds.length > 0) {
-          void touchFacts(supabase, loadedFactIds).catch(() => {})
+          void touchFacts(supabase, clinicId, loadedFactIds).catch(() => {})
         }
         try {
           generation?.end?.({
