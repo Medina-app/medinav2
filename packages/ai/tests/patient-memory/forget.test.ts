@@ -48,6 +48,8 @@ function makeSupabase(opts: {
     eqClinic,
     eqPatient,
     isDeletedFn,
+    orderCategoryFn,
+    orderKeyFn,
     updateFn,
     updateEqFn,
     inFn,
@@ -105,7 +107,7 @@ describe('AI-6: forgetFacts', () => {
 describe('AI-6: loadPatientFacts', () => {
   it('seleciona apenas facts ativos da clínica + paciente (deleted_at IS NULL filter)', async () => {
     const now = '2026-05-11T10:00:00.000Z'
-    const { sb, fromFn, selectFn, eqClinic, eqPatient, isDeletedFn } = makeSupabase({
+    const { sb, fromFn, selectFn, eqClinic, eqPatient, isDeletedFn, orderCategoryFn, orderKeyFn } = makeSupabase({
       selectResult: {
         data: [
           {
@@ -134,6 +136,10 @@ describe('AI-6: loadPatientFacts', () => {
     // CodeRabbit nitpick: garante que o soft-delete filter é aplicado — se removido,
     // facts esquecidos vazariam pro dispatcher/inbox.
     expect(isDeletedFn).toHaveBeenCalledWith('deleted_at', null)
+    // CodeRabbit round 3 nitpick: garante ordenação determinística category → key.
+    // Se a segunda .order() for removida, este assert quebra.
+    expect(orderCategoryFn).toHaveBeenCalledWith('category', { ascending: true })
+    expect(orderKeyFn).toHaveBeenCalledWith('key', { ascending: true })
     expect(facts).toHaveLength(1)
     expect(facts[0]).toMatchObject({
       id: 'fact-1',
