@@ -92,6 +92,17 @@ export async function dispatchAiAgentHandler(
     data: { messageId: result.messageId },
   });
 
+  // AI-6: ao escalar (urgency / pre-filter / post-filter exhausted / tool
+  // escalate_to_human), conversa transiciona pra waiting_human. Dispara
+  // extração de patient facts a partir do histórico. Worker é idempotente
+  // via UNIQUE INDEX em patient_facts(clinic_id, patient_id, category, key).
+  if (result.didEscalate) {
+    await step.sendEvent('request-patient-facts-extract', {
+      name: 'ai/patient-facts.extract-requested',
+      data: { conversationId, clinicId, trigger: 'escalated' },
+    });
+  }
+
   return {
     messageId: result.messageId,
     tokensIn: result.tokensIn,
