@@ -111,12 +111,15 @@ async function persistInbound(
 
   // Lazy-capture phone_number_id into clinic_integrations.config so outbound
   // sends can target the right Meta phone number without manual config.
+  // PR-D #7: filter por id AND clinic_id como defesa em profundidade. App
+  // layer; complementa o trigger BD que impede mutação de clinic_id.
   const cfg = (ctx.integration.config ?? {}) as Record<string, unknown>;
   if (cfg['phone_number_id'] !== inbound.phoneNumberId) {
     await sb
       .from('clinic_integrations')
       .update({ config: { ...cfg, phone_number_id: inbound.phoneNumberId } })
-      .eq('id', ctx.integration.id);
+      .eq('id', ctx.integration.id)
+      .eq('clinic_id', ctx.clinicId);
   }
 
   // Realtime push only on a real insert — duplicates already fired their

@@ -27,8 +27,12 @@ import { kapsoAdapter } from '../src/adapter';
 //     three .eq calls: clinic_id, status='published', name='agente-principal')
 // Routes by table name; default agent_configs response is null (no agent).
 function buildMockSupabase(opts: { agentRow?: Record<string, unknown> | null } = {}) {
-  const updateEq = vi.fn().mockResolvedValue({ data: null, error: null });
-  const integrationsChain = { update: vi.fn().mockReturnValue({ eq: updateEq }) };
+  // Adapter calls .update({...}).eq('id', ...).eq('clinic_id', ...) — two
+  // chained .eq() filters for defense-in-depth (PR-D #7). The first .eq
+  // returns the second .eq chain; the second resolves with { data, error }.
+  const updateEqClinic = vi.fn().mockResolvedValue({ data: null, error: null });
+  const updateEqId = vi.fn().mockReturnValue({ eq: updateEqClinic });
+  const integrationsChain = { update: vi.fn().mockReturnValue({ eq: updateEqId }) };
 
   const agentMaybeSingle = vi.fn().mockResolvedValue({ data: opts.agentRow ?? null, error: null });
   const agentLimit = vi.fn().mockReturnValue({ maybeSingle: agentMaybeSingle });
@@ -46,7 +50,8 @@ function buildMockSupabase(opts: { agentRow?: Record<string, unknown> | null } =
     client: { from } as unknown,
     fromMock: from,
     updateMock: integrationsChain.update,
-    eqMock: updateEq,
+    eqIdMock: updateEqId,
+    eqClinicMock: updateEqClinic,
     agentSelectMock: agentSelect,
     agentEqNameMock: agentEqName,
   };
@@ -315,7 +320,7 @@ describe('kapsoAdapter.handle inbound message', () => {
     );
   });
 
-  it('captures phone_number_id into integration.config when missing', async () => {
+  it('captures phone_number_id into integration.config with id + clinic_id .eq filters (PR-D #7)', async () => {
     const captured = buildMockSupabase();
     vi.mocked(createClient).mockReturnValue(captured.client as ReturnType<typeof createClient>);
     vi.mocked(lookupOrCreatePatientByPhone).mockResolvedValue({ patient: { id: 'pat' } as never, created: false });
@@ -328,7 +333,9 @@ describe('kapsoAdapter.handle inbound message', () => {
     expect(captured.updateMock).toHaveBeenCalledWith({
       config: { phone_number_id: '647015955153740' },
     });
-    expect(captured.eqMock).toHaveBeenCalledWith('id', 'integ-1');
+    // PR-D #7 defense in depth: app filters by BOTH id and clinic_id.
+    expect(captured.eqIdMock).toHaveBeenCalledWith('id', 'integ-1');
+    expect(captured.eqClinicMock).toHaveBeenCalledWith('clinic_id', 'clinic-1');
   });
 
   it('does NOT update integration.config when phone_number_id already matches', async () => {
