@@ -122,16 +122,24 @@ export async function dispatchAgent(args: DispatchAgentArgs): Promise<DispatchRe
 
   // PR-E GH #8: fallback ladder. Explicit args.agentName wins. Otherwise
   // load per-clinic default from clinics.default_agent_name (migration 0036).
-  // Final hardcoded fallback is dead code in practice (column is NOT NULL
-  // DEFAULT) — kept as belt-and-suspenders against future schema drift.
+  // Errors propagate — surfaces DB outages / permission issues to the Inngest
+  // worker (which retries) instead of silently routing to the hardcoded
+  // 'agente-principal' default. Mirrors the conversation/agent_config lookup
+  // patterns below (throw on error, not graceful fallback).
   if (agentName == null) {
-    const { data: clinicRow } = await supabase
+    const { data: clinicRow, error: clinicErr } = await supabase
       .from('clinics')
       .select('default_agent_name')
       .eq('id', clinicId)
       .single()
+    if (clinicErr || !clinicRow) {
+      throw new Error(`clinic default_agent_name lookup failed: ${clinicErr?.message ?? 'not found'}`)
+    }
+    // Column is NOT NULL DEFAULT 'agente-principal' (migration 0036), so the
+    // ?? fallback is dead code in practice — belt-and-suspenders against
+    // future schema drift (someone dropping NOT NULL or renaming the column).
     agentName =
-      (clinicRow as { default_agent_name?: string } | null)?.default_agent_name ?? 'agente-principal'
+      (clinicRow as { default_agent_name?: string }).default_agent_name ?? 'agente-principal'
   }
 
   // 1. Load conversation + verify state and clinic ownership.

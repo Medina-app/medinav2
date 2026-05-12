@@ -96,6 +96,8 @@ interface FakeRows {
   insertedMessageId?: string
   /** PR-E GH #8: clinics.default_agent_name fallback when args.agentName omitted. */
   clinicRow?: { default_agent_name: string } | null
+  /** PR-E GH #8: simulate DB error on the clinic lookup. */
+  clinicError?: { message: string } | null
 }
 
 function makeSupabase(rows: FakeRows = {}) {
@@ -129,10 +131,13 @@ function makeSupabase(rows: FakeRows = {}) {
   }))
 
   // PR-E GH #8: clinics.default_agent_name lookup. Default fallback shape
-  // mirrors migration 0036 default — 'agente-principal'.
-  const clinicSingle = vi
-    .fn()
-    .mockResolvedValue({ data: rows.clinicRow ?? { default_agent_name: 'agente-principal' }, error: null })
+  // mirrors migration 0036 default — 'agente-principal'. Tests can override
+  // clinicError to simulate DB failure paths.
+  const clinicSingle = vi.fn().mockResolvedValue(
+    rows.clinicError != null
+      ? { data: null, error: rows.clinicError }
+      : { data: rows.clinicRow ?? { default_agent_name: 'agente-principal' }, error: null },
+  )
   const clinicEqId = vi.fn().mockReturnValue({ single: clinicSingle })
   const clinicSelect = vi.fn().mockReturnValue({ eq: clinicEqId })
 
@@ -682,6 +687,24 @@ describe('dispatchAgent', () => {
     })
 
     expect(mockCreateAgent).toHaveBeenCalledWith(expect.objectContaining({ agentName: 'agente-triagem' }))
+  })
+
+  it('throws when clinic default_agent_name lookup fails — no silent fallback (GH #8)', async () => {
+    const { sb } = makeSupabase({
+      conversation: baseConv,
+      agentConfig: baseCfg,
+      clinicError: { message: 'connection refused' },
+    })
+    const { dispatchAgent } = await import('../src/dispatcher.js')
+    await expect(
+      dispatchAgent({
+        conversationId: 'conv-1',
+        clinicId: 'clinic-A',
+        messageId: 'm',
+        supabase: sb,
+        // agentName omitted — forces clinic lookup
+      }),
+    ).rejects.toThrow(/clinic default_agent_name lookup failed: connection refused/)
   })
 
   it('explicit args.agentName overrides clinics.default_agent_name (GH #8)', async () => {
