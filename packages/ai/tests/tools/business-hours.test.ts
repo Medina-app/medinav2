@@ -117,4 +117,19 @@ describe('check_business_hours', () => {
       .execute({})
     expect(r.timezone).toBe('America/Sao_Paulo')
   })
+
+  // PR-D #15: regression-coverage pro guard explícito `clinic.id !== clinicId`
+  // em business-hours.ts. Se o SELECT por alguma razão retornar um row de
+  // outra clinic (RLS bypass via service_role, migration que solte .eq, etc),
+  // a tool aborta antes de expor horários cross-tenant.
+  it('rejects when supabase returns clinic with id != ctx.clinicId (cross-tenant defense, PR-D #15)', async () => {
+    vi.setSystemTime(new Date('2026-05-06T13:00:00Z'))
+    const mock = buildMockSupabase({
+      clinics: { single: { id: 'clinic-OTHER', business_hours: SCHEDULE_DEFAULT } },
+    })
+    await expect(
+      asTool(buildBusinessHoursTool(buildToolContext({ supabase: mock.supabase as never })))
+        .execute({}),
+    ).rejects.toThrow(/cross-tenant violation/)
+  })
 })

@@ -21,41 +21,50 @@ const ctx = {
 
 const mockInsert = vi.fn().mockResolvedValue({ error: null })
 const mockSupabase = { from: vi.fn().mockReturnValue({ insert: mockInsert }) }
-const mockListUsers = vi.fn()
+const mockRpc = vi.fn()
 
 beforeEach(() => {
   vi.clearAllMocks()
   vi.mocked(getTenantContext).mockResolvedValue(ctx)
-  vi.mocked(getSupabaseServerClient).mockResolvedValue(mockSupabase as any)
+  vi.mocked(getSupabaseServerClient).mockResolvedValue(mockSupabase as never)
   vi.mocked(hasPermission).mockReturnValue(true)
-  vi.mocked(getSupabaseAdminClient).mockReturnValue({
-    auth: { admin: { listUsers: mockListUsers } },
-  } as any)
+  vi.mocked(getSupabaseAdminClient).mockReturnValue({ rpc: mockRpc } as never)
   mockInsert.mockResolvedValue({ error: null })
-  mockListUsers.mockResolvedValue({
-    data: { users: [{ id: 'u2', email: 'new@test.com', user_metadata: {} }] },
-    error: null,
-  })
+  mockRpc.mockResolvedValue({ data: 'u2', error: null })
 })
 
-describe('inviteMemberAction', () => {
+describe('inviteMemberAction (PR-D #9: email-filter via RPC, replaces listUsers)', () => {
   it('returns error for invalid email', async () => {
     const r = await inviteMemberAction({ email: 'not-email', role: 'member' })
     expect(r).toEqual({ error: expect.stringContaining('email') })
-    expect(mockListUsers).not.toHaveBeenCalled()
+    expect(mockRpc).not.toHaveBeenCalled()
   })
 
   it('returns error when hasPermission returns false', async () => {
     vi.mocked(hasPermission).mockReturnValue(false)
     const r = await inviteMemberAction({ email: 'a@b.com', role: 'member' })
     expect(r).toEqual({ error: expect.any(String) })
-    expect(mockListUsers).not.toHaveBeenCalled()
+    expect(mockRpc).not.toHaveBeenCalled()
   })
 
-  it('returns "conta no Medina" when user not found', async () => {
-    mockListUsers.mockResolvedValue({ data: { users: [] }, error: null })
+  it('chama RPC get_user_id_by_email_internal com p_email (não usa listUsers)', async () => {
+    await inviteMemberAction({ email: 'new@test.com', role: 'member' })
+    expect(mockRpc).toHaveBeenCalledWith('get_user_id_by_email_internal', {
+      p_email: 'new@test.com',
+    })
+  })
+
+  it('returns "conta no Medina" when RPC returns null (user not found)', async () => {
+    mockRpc.mockResolvedValue({ data: null, error: null })
     const r = await inviteMemberAction({ email: 'ghost@test.com', role: 'member' })
     expect(r).toEqual({ error: expect.stringContaining('conta no Medina') })
+    expect(mockInsert).not.toHaveBeenCalled()
+  })
+
+  it('returns generic lookup error when RPC errors', async () => {
+    mockRpc.mockResolvedValue({ data: null, error: { message: 'rpc down', code: 'XX000' } })
+    const r = await inviteMemberAction({ email: 'new@test.com', role: 'member' })
+    expect(r.error).toMatch(/buscar usuário/i)
     expect(mockInsert).not.toHaveBeenCalled()
   })
 
@@ -65,9 +74,12 @@ describe('inviteMemberAction', () => {
     expect(r).toEqual({ error: 'Esse usuário já é membro da clínica.' })
   })
 
-  it('returns success and calls from(clinic_members)', async () => {
+  it('returns success and inserts clinic_members with target user_id from RPC', async () => {
     const r = await inviteMemberAction({ email: 'new@test.com', role: 'member' })
     expect(r).toEqual({ success: true })
     expect(mockSupabase.from).toHaveBeenCalledWith('clinic_members')
+    expect(mockInsert).toHaveBeenCalledWith(
+      expect.objectContaining({ clinic_id: 'c1', user_id: 'u2', role: 'member' }),
+    )
   })
 })

@@ -34,36 +34,14 @@ function makeFormData(fields: Record<string, string>): FormData {
 const mockGetUser = vi.fn()
 const mockServerSupabase = { auth: { getUser: mockGetUser } }
 
-type ClinicResult = {
-  data: { id: string; slug: string } | null
-  error: { message: string; code: string } | null
-}
-type MemberResult = {
-  data: unknown
+type RpcResult = {
+  data: { id: string; slug: string } | Array<{ id: string; slug: string }> | null
   error: { message: string; code: string } | null
 }
 
-function buildAdmin(clinicResult: ClinicResult, memberResult: MemberResult) {
-  const clinicDeleteEq = vi.fn().mockResolvedValue({ data: null, error: null })
-  const clinicDeleteFn = vi.fn().mockReturnValue({ eq: clinicDeleteEq })
-
-  const fromFn = vi.fn().mockImplementation((table: string) => {
-    if (table === 'clinics') {
-      return {
-        insert: vi.fn().mockReturnValue({
-          select: vi.fn().mockReturnValue({
-            single: vi.fn().mockResolvedValue(clinicResult),
-          }),
-        }),
-        delete: clinicDeleteFn,
-      }
-    }
-    if (table === 'clinic_members') {
-      return { insert: vi.fn().mockResolvedValue(memberResult) }
-    }
-  })
-
-  return { admin: { from: fromFn }, clinicDeleteFn, clinicDeleteEq }
+function buildAdmin(rpcResult: RpcResult) {
+  const rpc = vi.fn().mockResolvedValue(rpcResult)
+  return { admin: { rpc }, rpc }
 }
 
 beforeEach(() => {
@@ -74,7 +52,7 @@ beforeEach(() => {
   mockGetUser.mockResolvedValue({ data: { user: { id: 'user-123' } }, error: null })
 })
 
-describe('createClinicAction', () => {
+describe('createClinicAction (PR-D #10: atomic create_clinic_with_owner RPC)', () => {
   it('returns Zod error when slug has uppercase letters', async () => {
     const state = await createClinicAction(
       null,
@@ -93,11 +71,32 @@ describe('createClinicAction', () => {
     expect(state).toEqual({ error: 'Slug deve ter pelo menos 3 caracteres' })
   })
 
-  it('maps Postgres 23505 to slug-already-in-use message', async () => {
-    const { admin } = buildAdmin(
-      { data: null, error: { message: 'duplicate key', code: '23505' } },
-      { data: null, error: null },
+  it('chama RPC create_clinic_with_owner com name/slug/user_id', async () => {
+    const { admin, rpc } = buildAdmin({
+      data: { id: 'clinic-xyz', slug: 'minha-clinica' },
+      error: null,
+    })
+    vi.mocked(getSupabaseAdminClient).mockReturnValue(
+      admin as unknown as ReturnType<typeof getSupabaseAdminClient>,
     )
+
+    await createClinicAction(
+      null,
+      makeFormData({ name: 'Minha Clínica', slug: 'minha-clinica' }),
+    )
+
+    expect(rpc).toHaveBeenCalledWith('create_clinic_with_owner', {
+      p_name: 'Minha Clínica',
+      p_slug: 'minha-clinica',
+      p_user_id: 'user-123',
+    })
+  })
+
+  it('maps Postgres 23505 to slug-already-in-use message', async () => {
+    const { admin } = buildAdmin({
+      data: null,
+      error: { message: 'duplicate key value violates unique constraint', code: '23505' },
+    })
     vi.mocked(getSupabaseAdminClient).mockReturnValue(
       admin as unknown as ReturnType<typeof getSupabaseAdminClient>,
     )
@@ -108,30 +107,26 @@ describe('createClinicAction', () => {
     expect(state).toEqual({ error: 'Este slug já está em uso. Escolha outro.' })
   })
 
-  it('deletes clinic and returns error when membership insert fails', async () => {
-    const { admin, clinicDeleteFn, clinicDeleteEq } = buildAdmin(
-      { data: { id: 'clinic-abc', slug: 'minha-clinica' }, error: null },
-      { data: null, error: { message: 'FK error', code: '23503' } },
-    )
+  it('returns generic error when RPC errors with unknown code', async () => {
+    const { admin } = buildAdmin({
+      data: null,
+      error: { message: 'connection refused', code: '08000' },
+    })
     vi.mocked(getSupabaseAdminClient).mockReturnValue(
       admin as unknown as ReturnType<typeof getSupabaseAdminClient>,
     )
-
     const state = await createClinicAction(
       null,
       makeFormData({ name: 'Minha Clínica', slug: 'minha-clinica' }),
     )
-
-    expect(clinicDeleteFn).toHaveBeenCalled()
-    expect(clinicDeleteEq).toHaveBeenCalledWith('id', 'clinic-abc')
-    expect(state).toEqual({ error: 'Erro ao configurar clínica. Tente novamente.' })
+    expect(state).toEqual({ error: 'Erro ao criar clínica. Tente novamente.' })
   })
 
-  it('revalidates and redirects to /<slug> on success', async () => {
-    const { admin } = buildAdmin(
-      { data: { id: 'clinic-xyz', slug: 'minha-clinica' }, error: null },
-      { data: {}, error: null },
-    )
+  it('revalidates and redirects to /<slug> on success (RPC returns single row object)', async () => {
+    const { admin } = buildAdmin({
+      data: { id: 'clinic-xyz', slug: 'minha-clinica' },
+      error: null,
+    })
     vi.mocked(getSupabaseAdminClient).mockReturnValue(
       admin as unknown as ReturnType<typeof getSupabaseAdminClient>,
     )
@@ -141,5 +136,34 @@ describe('createClinicAction', () => {
       makeFormData({ name: 'Minha Clínica', slug: 'minha-clinica' }),
     )
     expect(redirect).toHaveBeenCalledWith('/minha-clinica')
+  })
+
+  it('handles RPC returning array shape (TABLE return type, single-row)', async () => {
+    const { admin } = buildAdmin({
+      data: [{ id: 'clinic-arr', slug: 'minha-clinica' }],
+      error: null,
+    })
+    vi.mocked(getSupabaseAdminClient).mockReturnValue(
+      admin as unknown as ReturnType<typeof getSupabaseAdminClient>,
+    )
+
+    await createClinicAction(
+      null,
+      makeFormData({ name: 'Minha Clínica', slug: 'minha-clinica' }),
+    )
+    expect(redirect).toHaveBeenCalledWith('/minha-clinica')
+  })
+
+  it('returns generic error if RPC returns empty data without error', async () => {
+    const { admin } = buildAdmin({ data: null, error: null })
+    vi.mocked(getSupabaseAdminClient).mockReturnValue(
+      admin as unknown as ReturnType<typeof getSupabaseAdminClient>,
+    )
+
+    const state = await createClinicAction(
+      null,
+      makeFormData({ name: 'Minha Clínica', slug: 'minha-clinica' }),
+    )
+    expect(state).toEqual({ error: 'Erro ao criar clínica. Tente novamente.' })
   })
 })
