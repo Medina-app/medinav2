@@ -37,9 +37,14 @@ interface Props {
 
 export function SchedulingProviderForm({ initialProvider, canManage }: Props) {
   const [selected, setSelected] = useState<Provider>(initialProvider)
+  // Tracks the last-saved value so the "Salvar" button disables after success
+  // even before revalidatePath rebuilds the server component. Without this,
+  // `dirty` stayed true post-save (initialProvider prop only updates on RSC
+  // refresh) → user could spam redundant saves.
+  const [persistedProvider, setPersistedProvider] = useState<Provider>(initialProvider)
   const [isPending, startTransition] = useTransition()
 
-  const dirty = selected !== initialProvider
+  const dirty = selected !== persistedProvider
 
   function handleSave() {
     startTransition(async () => {
@@ -49,12 +54,13 @@ export function SchedulingProviderForm({ initialProvider, canManage }: Props) {
           toast.error(result.error)
           return
         }
+        setPersistedProvider(selected)
         toast.success('Provider atualizado.')
-      } catch (err) {
-        // Server action lança em casos de rede/serialização — caller perde feedback
-        // sem catch explícito.
-        const message = err instanceof Error ? err.message : 'Erro inesperado ao salvar.'
-        toast.error(message)
+      } catch {
+        // Server action throw (network/serialization). Generic message —
+        // err.message may carry backend internals; log technical detail
+        // separately if needed.
+        toast.error('Erro inesperado ao salvar. Tente novamente.')
       }
     })
   }

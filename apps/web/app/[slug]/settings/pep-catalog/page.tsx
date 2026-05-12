@@ -33,13 +33,35 @@ export default async function PepCatalogPage() {
   const ctx = await getTenantContext()
   const supabase = await getSupabaseServerClient()
 
-  const { data: clinic } = await supabase
+  const { data: clinic, error: clinicErr } = await supabase
     .from('clinics')
     .select('scheduling_provider')
     .eq('id', ctx.clinicId)
     .single()
 
-  const provider = (clinic as { scheduling_provider?: string } | null)?.scheduling_provider ?? 'none'
+  // Surface clinic-lookup failures explicitly. Defaulting to 'none' would
+  // route the user into the "PEP não ativo" branch, masking operational
+  // errors (RLS misconfig, DB outage) as legitimate inactive config.
+  if (clinicErr || !clinic) {
+    return (
+      <div style={{ maxWidth: 720, display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <h1
+          style={{
+            fontSize: 18,
+            fontWeight: 600,
+            letterSpacing: '-0.025em',
+            color: 'var(--luma-text-primary)',
+            margin: 0,
+          }}
+        >
+          Catálogo PEP
+        </h1>
+        <Empty label="Não foi possível carregar a configuração da clínica. Tente recarregar a página." />
+      </div>
+    )
+  }
+
+  const provider = (clinic as { scheduling_provider?: string }).scheduling_provider ?? 'none'
 
   if (provider !== 'pep_ans') {
     return (
