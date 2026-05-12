@@ -2,7 +2,7 @@ import { createClient } from '@supabase/supabase-js'
 import type { ClinicIntegration } from '@medina/db'
 import { verifyHmacSignature } from './signature'
 import { registry } from './registry'
-import { logger } from './logger'
+import { logger, type Logger } from './logger'
 import { mapClinicIntegration } from './mappers'
 import { InngestDispatchError } from './errors'
 import type { InngestSendFn, PublishEventFn, WebhookContext } from './types'
@@ -13,7 +13,26 @@ export type LookupFn = (
   clinicId: string,
 ) => Promise<ClinicIntegration | null>
 
-function createDefaultLookup(): LookupFn {
+// PR-E #6+#14: module-level lazy singleton. The previous default param
+// `lookupFn: LookupFn = createDefaultLookup()` was evaluated per call,
+// instantiating a fresh Supabase client + connection pool on every webhook
+// hit (post-chat-1 #3 + post-push B6 audits both flagged this). Memoize so
+// the FIRST handleWebhook call lazily creates one client, subsequent calls
+// reuse it.
+//
+// Lazy (vs eager top-level `const`) because env vars may not be set at
+// module import time in some test/build paths; defer until first hit guarantees
+// they're set by then.
+let _defaultLookup: LookupFn | null = null
+
+function getDefaultLookup(): LookupFn {
+  if (_defaultLookup == null) {
+    _defaultLookup = createDefaultLookupImpl()
+  }
+  return _defaultLookup
+}
+
+function createDefaultLookupImpl(): LookupFn {
   const sb = createClient(
     process.env['NEXT_PUBLIC_SUPABASE_URL'] ?? '',
     process.env['SUPABASE_SERVICE_ROLE_KEY'] ?? '',
@@ -43,17 +62,23 @@ const j = (body: unknown, status: number) =>
 export async function handleWebhook(
   req: Request,
   params: { type: string; provider: string; clinicId: string },
-  lookupFn: LookupFn = createDefaultLookup(),
+  lookupFn?: LookupFn,
   inngestSend?: InngestSendFn,
   publishEvent?: PublishEventFn,
+  loggerOverride?: Logger,
 ): Promise<Response> {
+  // PR-E #11: tests inject mock Logger here instead of spying on console.log.
+  const log: Logger = loggerOverride ?? logger
+  // PR-E #6+#14: lazy singleton — first call creates the Supabase client,
+  // subsequent calls reuse it. Explicit lookupFn arg (e.g. test mock) bypasses.
+  const lookup: LookupFn = lookupFn ?? getDefaultLookup()
   const t0 = Date.now()
   const { type, provider, clinicId } = params
   const base = { clinic_id: clinicId, integration_id: '', type, provider }
 
-  const integration = await lookupFn(type, provider, clinicId)
+  const integration = await lookup(type, provider, clinicId)
   if (!integration) {
-    logger.warn({
+    log.warn({
       ...base,
       action: 'lookup',
       duration_ms: Date.now() - t0,
@@ -65,7 +90,7 @@ export async function handleWebhook(
   const lb = { ...base, integration_id: integration.id }
 
   if (integration.status === 'disabled') {
-    logger.warn({
+    log.warn({
       ...lb,
       action: 'validate_status',
       duration_ms: Date.now() - t0,
@@ -76,7 +101,7 @@ export async function handleWebhook(
   }
 
   if (integration.type !== type || integration.provider !== provider) {
-    logger.warn({
+    log.warn({
       ...lb,
       action: 'validate_type_provider',
       duration_ms: Date.now() - t0,
@@ -91,7 +116,7 @@ export async function handleWebhook(
 
   if (integration.status !== 'configuring') {
     if (!integration.webhookSecret) {
-      logger.warn({
+      log.warn({
         ...lb,
         action: 'validate_signature',
         duration_ms: Date.now() - t0,
@@ -102,7 +127,7 @@ export async function handleWebhook(
     }
     const sig = req.headers.get(adapter.signatureHeader) ?? ''
     if (!verifyHmacSignature(integration.webhookSecret, rawBody, sig)) {
-      logger.warn({
+      log.warn({
         ...lb,
         action: 'validate_signature',
         duration_ms: Date.now() - t0,
@@ -132,7 +157,7 @@ export async function handleWebhook(
 
   try {
     const result = await adapter.handle(ctx)
-    logger.info({ ...lb, action: 'handle', duration_ms: Date.now() - t0, success: true })
+    log.info({ ...lb, action: 'handle', duration_ms: Date.now() - t0, success: true })
     return j(result, 200)
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err)
@@ -140,7 +165,7 @@ export async function handleWebhook(
       // Surface a 5xx so the upstream sender (e.g. Kapso) retries the
       // delivery — otherwise a transient Inngest outage silently drops
       // status callbacks because we already 200'd the webhook.
-      logger.warn({
+      log.warn({
         ...lb,
         action: 'inngest_dispatch',
         duration_ms: Date.now() - t0,
@@ -149,7 +174,7 @@ export async function handleWebhook(
       })
       return new Response('inngest dispatch failed', { status: 503 })
     }
-    logger.error({ ...lb, action: 'handle', duration_ms: Date.now() - t0, success: false, error })
+    log.error({ ...lb, action: 'handle', duration_ms: Date.now() - t0, success: false, error })
     return j({ processed: false, reason: 'adapter_error' }, 200)
   }
 }

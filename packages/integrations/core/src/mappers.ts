@@ -1,3 +1,4 @@
+import { Buffer } from 'node:buffer';
 import type { ClinicIntegration } from '@medina/db';
 
 /**
@@ -21,7 +22,13 @@ export function mapClinicIntegration(row: Record<string, unknown>): ClinicIntegr
     name: row['name'] as string,
     status: row['status'] as string,
     config: (row['config'] as ClinicIntegration['config']) ?? {},
-    encryptedCredentials: (row['encrypted_credentials'] as Buffer | null) ?? null,
+    // PR-E #8: Supabase JS serializa bytea como hex string (`\x...`), não Buffer.
+    // Drizzle ORM client (não usado nessa boundary hoje) sim retorna Buffer.
+    // Validamos runtime — sem Buffer real, retornamos null. Quem precisa dos
+    // bytes decifrados usa get_integration_credential_internal RPC server-side.
+    encryptedCredentials: Buffer.isBuffer(row['encrypted_credentials'])
+      ? row['encrypted_credentials']
+      : null,
     webhookSecret: (row['webhook_secret'] as string | null) ?? null,
     webhookPath: row['webhook_path'] as string,
     lastSyncAt: dt(row['last_sync_at']),

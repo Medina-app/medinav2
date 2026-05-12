@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { Buffer } from 'node:buffer';
 import { mapClinicIntegration } from '../src/mappers';
 
 const rawRow = {
@@ -53,5 +54,22 @@ describe('mapClinicIntegration', () => {
     expect(out.config).toEqual({});
     expect(out.metadata).toEqual({});
     expect(out.webhookSecret).toBeNull();
+  });
+
+  // PR-E #8: Supabase JS serializa bytea como hex string (`\x...`), não Buffer.
+  // O cast original `as Buffer | null` mentia sobre o shape runtime — qualquer
+  // consumer que chamasse `.length` ou `.toString('utf8')` num string runtime
+  // não saber o tipo prometido pelo TS quebraria. Validamos com Buffer.isBuffer
+  // pra ficar verdade independente do transport.
+  it('returns null for encryptedCredentials when value is hex string (Supabase JS bytea shape) (#8)', () => {
+    const out = mapClinicIntegration({ ...rawRow, encrypted_credentials: '\\x4f1a2b3c' });
+    expect(out.encryptedCredentials).toBeNull();
+  });
+
+  it('returns Buffer for encryptedCredentials when value is real Buffer (Drizzle client path) (#8)', () => {
+    const buf = Buffer.from('hello', 'utf8');
+    const out = mapClinicIntegration({ ...rawRow, encrypted_credentials: buf });
+    expect(out.encryptedCredentials).toEqual(buf);
+    expect(Buffer.isBuffer(out.encryptedCredentials)).toBe(true);
   });
 });
