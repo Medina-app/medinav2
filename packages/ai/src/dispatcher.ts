@@ -489,10 +489,27 @@ export async function dispatchAgent(args: DispatchAgentArgs): Promise<DispatchRe
       // 6. Detect tool-call escalation (LLM chamou escalate_to_human). Tool já
       //    inseriu system message + flipou state. Se LLM produziu goodbye text,
       //    inserimos junto com o resto; se text vazio, skip insert.
+      //
+      // AI-6 hotfix: confiamos na state transition do DB ao invés de inspecionar
+      // result.steps[i].toolCalls[j].payload?.toolName — shape interno do
+      // Mastra/AI-SDK varia entre versões e pode quebrar silenciosamente. Como
+      // a tool escalate_to_human chama escalate_conversation RPC que transita
+      // state pra waiting_human atomicamente, basta re-ler o state. Sinal extra
+      // pra `didEscalate` flag que dispara extract-patient-facts.
       const steps = ((result as { steps?: AgentStep[] }).steps) ?? []
-      const escalated = steps.some((s) =>
+      const escalatedByStepShape = steps.some((s) =>
         (s.toolCalls ?? []).some((tc) => tc.payload?.toolName === 'escalate_to_human'),
       )
+      let escalated = escalatedByStepShape
+      if (!escalated) {
+        const { data: convAfter } = await supabase
+          .from('conversations')
+          .select('state')
+          .eq('id', conversationId)
+          .single()
+        const stateAfter = (convAfter as { state?: string } | null)?.state
+        escalated = stateAfter === 'waiting_human' || stateAfter === 'resolved'
+      }
 
       // Emit one Langfuse span per tool call (post-hoc — Mastra emits OTel
       // but the manual generation API doesn't auto-attach those spans).
