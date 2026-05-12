@@ -1,5 +1,28 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { createHmac } from 'crypto'
+
+// PR-E #6+#14: stub @supabase/supabase-js BEFORE importing webhook-handler
+// so the module-level singleton path uses our spy. vi.hoisted lifts the mock
+// factory above the import — required because vi.mock is itself hoisted.
+const { createClientMock } = vi.hoisted(() => ({
+  createClientMock: vi.fn(() => ({
+    from: vi.fn(() => ({
+      select: vi.fn(() => ({
+        eq: vi.fn(() => ({
+          eq: vi.fn(() => ({
+            eq: vi.fn(() => ({
+              is: vi.fn(() => ({
+                single: vi.fn(() => Promise.resolve({ data: null, error: null })),
+              })),
+            })),
+          })),
+        })),
+      })),
+    })),
+  })),
+}))
+vi.mock('@supabase/supabase-js', () => ({ createClient: createClientMock }))
+
 import { handleWebhook } from '../src/webhook-handler'
 import { registry } from '../src/registry'
 import { InngestDispatchError } from '../src/errors'
@@ -69,6 +92,27 @@ const req = (body: string, hdrs: Record<string, string> = {}) =>
 
 describe('handleWebhook', () => {
   afterEach(() => registry._clear())
+
+  // PR-E #6+#14: prove that the default Supabase client is memoized.
+  // Without the singleton, createDefaultLookup() runs per call (default param
+  // eval), and each invocation instantiates a fresh createClient — observable
+  // here as createClientMock being called once per handleWebhook hit.
+  it('createDefaultLookup is memoized — repeated default-path handleWebhook calls reuse same Supabase client (#6 #14)', async () => {
+    const before = createClientMock.mock.calls.length
+    registry.register(makeAdapter({ handle: vi.fn().mockResolvedValue({ processed: true }) }))
+    // Three hits using the DEFAULT lookupFn (don't pass one).
+    for (let i = 0; i < 3; i++) {
+      await handleWebhook(
+        req('{}', { 'x-kapso-signature': sign(SECRET, '{}') }),
+        PARAMS,
+      )
+    }
+    const after = createClientMock.mock.calls.length
+    const delta = after - before
+    // Singleton: 0 (already initialized in a prior test) or 1 (first init).
+    // Per-hit (bug): would be 3+.
+    expect(delta).toBeLessThanOrEqual(1)
+  })
 
   it('returns 404 when integration not found', async () => {
     const res = await handleWebhook(req('{}'), PARAMS, vi.fn().mockResolvedValue(null))

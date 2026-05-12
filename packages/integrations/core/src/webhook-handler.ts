@@ -13,7 +13,26 @@ export type LookupFn = (
   clinicId: string,
 ) => Promise<ClinicIntegration | null>
 
-function createDefaultLookup(): LookupFn {
+// PR-E #6+#14: module-level lazy singleton. The previous default param
+// `lookupFn: LookupFn = createDefaultLookup()` was evaluated per call,
+// instantiating a fresh Supabase client + connection pool on every webhook
+// hit (post-chat-1 #3 + post-push B6 audits both flagged this). Memoize so
+// the FIRST handleWebhook call lazily creates one client, subsequent calls
+// reuse it.
+//
+// Lazy (vs eager top-level `const`) because env vars may not be set at
+// module import time in some test/build paths; defer until first hit guarantees
+// they're set by then.
+let _defaultLookup: LookupFn | null = null
+
+function getDefaultLookup(): LookupFn {
+  if (_defaultLookup == null) {
+    _defaultLookup = createDefaultLookupImpl()
+  }
+  return _defaultLookup
+}
+
+function createDefaultLookupImpl(): LookupFn {
   const sb = createClient(
     process.env['NEXT_PUBLIC_SUPABASE_URL'] ?? '',
     process.env['SUPABASE_SERVICE_ROLE_KEY'] ?? '',
@@ -43,18 +62,21 @@ const j = (body: unknown, status: number) =>
 export async function handleWebhook(
   req: Request,
   params: { type: string; provider: string; clinicId: string },
-  lookupFn: LookupFn = createDefaultLookup(),
+  lookupFn?: LookupFn,
   inngestSend?: InngestSendFn,
   publishEvent?: PublishEventFn,
   loggerOverride?: Logger,
 ): Promise<Response> {
   // PR-E #11: tests inject mock Logger here instead of spying on console.log.
   const log: Logger = loggerOverride ?? logger
+  // PR-E #6+#14: lazy singleton — first call creates the Supabase client,
+  // subsequent calls reuse it. Explicit lookupFn arg (e.g. test mock) bypasses.
+  const lookup: LookupFn = lookupFn ?? getDefaultLookup()
   const t0 = Date.now()
   const { type, provider, clinicId } = params
   const base = { clinic_id: clinicId, integration_id: '', type, provider }
 
-  const integration = await lookupFn(type, provider, clinicId)
+  const integration = await lookup(type, provider, clinicId)
   if (!integration) {
     log.warn({
       ...base,
