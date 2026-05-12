@@ -117,7 +117,22 @@ function maybeHaikuClassifier(): LlmClassify | undefined {
  *   - DB errors on insert
  */
 export async function dispatchAgent(args: DispatchAgentArgs): Promise<DispatchResult> {
-  const { supabase, conversationId, clinicId, agentName = 'agente-principal', buildCalcomClient } = args
+  const { supabase, conversationId, clinicId, buildCalcomClient } = args
+  let { agentName } = args
+
+  // PR-E GH #8: fallback ladder. Explicit args.agentName wins. Otherwise
+  // load per-clinic default from clinics.default_agent_name (migration 0036).
+  // Final hardcoded fallback is dead code in practice (column is NOT NULL
+  // DEFAULT) — kept as belt-and-suspenders against future schema drift.
+  if (agentName == null) {
+    const { data: clinicRow } = await supabase
+      .from('clinics')
+      .select('default_agent_name')
+      .eq('id', clinicId)
+      .single()
+    agentName =
+      (clinicRow as { default_agent_name?: string } | null)?.default_agent_name ?? 'agente-principal'
+  }
 
   // 1. Load conversation + verify state and clinic ownership.
   const { data: conv, error: cErr } = await supabase

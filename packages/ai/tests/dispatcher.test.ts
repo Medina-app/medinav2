@@ -94,6 +94,8 @@ interface FakeRows {
     created_at: string
   }>
   insertedMessageId?: string
+  /** PR-E GH #8: clinics.default_agent_name fallback when args.agentName omitted. */
+  clinicRow?: { default_agent_name: string } | null
 }
 
 function makeSupabase(rows: FakeRows = {}) {
@@ -126,10 +128,19 @@ function makeSupabase(rows: FakeRows = {}) {
     insert: insertedMessage,
   }))
 
+  // PR-E GH #8: clinics.default_agent_name lookup. Default fallback shape
+  // mirrors migration 0036 default — 'agente-principal'.
+  const clinicSingle = vi
+    .fn()
+    .mockResolvedValue({ data: rows.clinicRow ?? { default_agent_name: 'agente-principal' }, error: null })
+  const clinicEqId = vi.fn().mockReturnValue({ single: clinicSingle })
+  const clinicSelect = vi.fn().mockReturnValue({ eq: clinicEqId })
+
   const from = vi.fn().mockImplementation((table: string) => {
     if (table === 'conversations') return { select: conversationSelect }
     if (table === 'agent_configs') return { select: agentSelect }
     if (table === 'messages') return messagesFromCall()
+    if (table === 'clinics') return { select: clinicSelect }
     throw new Error(`unmocked table: ${table}`)
   })
 
@@ -653,6 +664,44 @@ describe('dispatchAgent', () => {
     expect(eqStatusCall).toHaveBeenCalledWith('status', 'published')
 
     expect(mockCreateAgent).toHaveBeenCalledWith(expect.objectContaining({ agentName: 'agente-triagem' }))
+  })
+
+  it('uses clinics.default_agent_name when args.agentName is omitted (GH #8)', async () => {
+    const { sb } = makeSupabase({
+      conversation: baseConv,
+      agentConfig: { ...baseCfg, name: 'agente-triagem' },
+      clinicRow: { default_agent_name: 'agente-triagem' },
+    })
+    const { dispatchAgent } = await import('../src/dispatcher.js')
+    await dispatchAgent({
+      conversationId: 'conv-1',
+      clinicId: 'clinic-A',
+      messageId: 'm',
+      supabase: sb,
+      // intentionally omit agentName — should fall back to clinics.default_agent_name
+    })
+
+    expect(mockCreateAgent).toHaveBeenCalledWith(expect.objectContaining({ agentName: 'agente-triagem' }))
+  })
+
+  it('explicit args.agentName overrides clinics.default_agent_name (GH #8)', async () => {
+    const { sb } = makeSupabase({
+      conversation: baseConv,
+      agentConfig: { ...baseCfg, name: 'agente-explicit' },
+      // Clinic column says 'agente-from-column' but caller insists on
+      // 'agente-explicit' — explicit arg wins.
+      clinicRow: { default_agent_name: 'agente-from-column' },
+    })
+    const { dispatchAgent } = await import('../src/dispatcher.js')
+    await dispatchAgent({
+      conversationId: 'conv-1',
+      clinicId: 'clinic-A',
+      messageId: 'm',
+      supabase: sb,
+      agentName: 'agente-explicit',
+    })
+
+    expect(mockCreateAgent).toHaveBeenCalledWith(expect.objectContaining({ agentName: 'agente-explicit' }))
   })
 
   // ─── AI-5 guardrails integration ────────────────────────────────────────────
