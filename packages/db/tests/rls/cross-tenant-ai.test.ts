@@ -368,4 +368,33 @@ describe('cross-tenant defense in depth (PR-A #15)', () => {
     expect(audits[0]?.metadata.after.state).toBe('waiting_human');
     expect(audits[0]?.metadata.after.escalated_via).toBe('manual');
   });
+
+  // PR-D #15: regression-coverage para o cross-tenant guard interno do
+  // collect_info_atomic. Migration 0023 implementou o guard; esse teste
+  // garante que qualquer migration futura que mexer na função não
+  // enfraqueça a checagem v_clinic IS DISTINCT FROM p_clinic_id. Sem esse
+  // guard, um atacante posicionado em clinic-B com referência a um conv_id
+  // de clinic-A poderia gravar collected_info na conversa errada.
+  it('collect_info_atomic rejects when p_clinic_id != conv.clinic_id (PR-D #15)', async () => {
+    const clinicA = await makeClinic('CI-A');
+    const clinicB = await makeClinic('CI-B');
+    const intA = await createTestIntegration(sql, clinicA.id);
+    const convA = await createTestConversation(sql, clinicA.id, intA.id);
+
+    await expect(sql`
+      SELECT collect_info_atomic(
+        ${convA.id}::uuid,
+        ${clinicB.id}::uuid,
+        ${'name'}::text,
+        ${'2026-05-12T00:00:00Z'}::text
+      )
+    `).rejects.toThrow(/cross-tenant violation/);
+
+    const [row] = await sql<{ metadata: Record<string, unknown> | null }[]>`
+      SELECT metadata FROM conversations WHERE id = ${convA.id}
+    `;
+    const collected = (row?.metadata as { collected_info?: Record<string, unknown> } | null)
+      ?.collected_info;
+    expect(collected).toBeUndefined();
+  });
 });
