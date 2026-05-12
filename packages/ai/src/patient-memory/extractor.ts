@@ -115,9 +115,13 @@ export function createFactsExtractor(opts: ExtractFactsOpts = {}): FactsExtracto
       throw new Error('Facts extractor returned empty content')
     }
 
+    // Defense in depth contra LLM ignorando o "Sem texto antes ou depois do
+    // JSON" do system prompt: Haiku às vezes envolve em ```json ... ``` ou
+    // adiciona texto explicativo. extractJsonObject normaliza.
+    const cleaned = extractJsonObject(raw)
     let parsedRaw: unknown
     try {
-      parsedRaw = JSON.parse(raw)
+      parsedRaw = JSON.parse(cleaned)
     } catch {
       throw new Error(`Facts extractor returned non-JSON: ${raw.slice(0, 200)}`)
     }
@@ -134,6 +138,38 @@ export function createFactsExtractor(opts: ExtractFactsOpts = {}): FactsExtracto
       isFactAllowed(fact, input.categories),
     )
   }
+}
+
+/**
+ * Normaliza output do LLM removendo markdown code fences (```json ... ```)
+ * e qualquer texto fora do primeiro objeto JSON. Caso o LLM responda
+ * apenas com JSON limpo, retorna inalterado.
+ */
+export function extractJsonObject(raw: string): string {
+  const trimmed = raw.trim()
+  // Path feliz: já é JSON limpo começando com {
+  if (trimmed.startsWith('{')) {
+    return trimmed
+  }
+  // Markdown fence: ```json\n{...}\n``` ou ```\n{...}\n```
+  const fenced = trimmed.match(/^```(?:json)?\s*\n?([\s\S]*?)\n?```\s*$/i)
+  if (fenced && fenced[1]) {
+    return fenced[1].trim()
+  }
+  // Fence só no início (LLM cortou antes do close): ```json\n{...}
+  if (trimmed.startsWith('```')) {
+    return trimmed
+      .replace(/^```(?:json)?\s*\n?/i, '')
+      .replace(/\n?```\s*$/i, '')
+      .trim()
+  }
+  // Fallback: extrai do primeiro { até o último } (texto antes/depois ignorado).
+  const first = trimmed.indexOf('{')
+  const last = trimmed.lastIndexOf('}')
+  if (first >= 0 && last > first) {
+    return trimmed.slice(first, last + 1)
+  }
+  return trimmed
 }
 
 function isFactAllowed(fact: ExtractedFact, enabled: ReadonlySet<FactCategory>): boolean {

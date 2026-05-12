@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { createFactsExtractor } from '../../src/patient-memory/extractor.js'
+import { createFactsExtractor, extractJsonObject } from '../../src/patient-memory/extractor.js'
 
 function fakeFetch(payload: unknown, status = 200): typeof fetch {
   const content = typeof payload === 'string' ? payload : JSON.stringify(payload)
@@ -172,5 +172,61 @@ describe('AI-6: createFactsExtractor', () => {
       categories: new Set() as ReadonlySet<'administrative' | 'financial'>,
     })
     expect(facts).toEqual([])
+  })
+
+  // ─── Markdown fence resiliency (production bug observed in PR #30) ─────────
+  // Haiku ignorou "Sem texto antes ou depois do JSON" e envolveu o output em
+  // ```json ... ```. JSON.parse direto falhava → worker FAILED no Inngest.
+
+  it('parser strips ```json...``` fence (Haiku real output em prod)', async () => {
+    const fencedRaw = '```json\n{"facts":[{"category":"administrative","key":"preferred_name","value":"Gabriel","confidence":1.0}]}\n```'
+    const extract = createFactsExtractor({ apiKey: 'test', fetch: fakeFetch(fencedRaw) })
+    const facts = await extract(baseInput)
+    expect(facts).toHaveLength(1)
+    expect(facts[0]).toMatchObject({ key: 'preferred_name', value: 'Gabriel' })
+  })
+
+  it('parser strips ```...``` fence sem language tag', async () => {
+    const fencedRaw = '```\n{"facts":[{"category":"administrative","key":"preferred_name","value":"X","confidence":0.8}]}\n```'
+    const extract = createFactsExtractor({ apiKey: 'test', fetch: fakeFetch(fencedRaw) })
+    const facts = await extract(baseInput)
+    expect(facts).toHaveLength(1)
+  })
+
+  it('parser fallback extrai JSON entre { primeiro } último (texto explicativo antes/depois)', async () => {
+    const noisyRaw = 'Aqui está a extração:\n{"facts":[{"category":"administrative","key":"preferred_name","value":"X","confidence":0.8}]}\nFim.'
+    const extract = createFactsExtractor({ apiKey: 'test', fetch: fakeFetch(noisyRaw) })
+    const facts = await extract(baseInput)
+    expect(facts).toHaveLength(1)
+  })
+})
+
+describe('AI-6: extractJsonObject (unit)', () => {
+  it('JSON limpo passa inalterado', () => {
+    expect(extractJsonObject('{"a":1}')).toBe('{"a":1}')
+  })
+
+  it('strips ```json fence completo', () => {
+    expect(extractJsonObject('```json\n{"a":1}\n```')).toBe('{"a":1}')
+  })
+
+  it('strips ``` fence sem language', () => {
+    expect(extractJsonObject('```\n{"a":1}\n```')).toBe('{"a":1}')
+  })
+
+  it('strips fence só de abertura (LLM truncou closing)', () => {
+    expect(extractJsonObject('```json\n{"a":1}')).toBe('{"a":1}')
+  })
+
+  it('fallback extrai entre { ... } com texto envolto', () => {
+    expect(extractJsonObject('algo antes {"a":1} algo depois')).toBe('{"a":1}')
+  })
+
+  it('retorna trimmed quando sem nada parecido com JSON', () => {
+    expect(extractJsonObject('  no json here  ')).toBe('no json here')
+  })
+
+  it('case-insensitive ```JSON', () => {
+    expect(extractJsonObject('```JSON\n{"a":1}\n```')).toBe('{"a":1}')
   })
 })
