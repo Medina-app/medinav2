@@ -398,15 +398,3 @@ export async function deleteTestUser(sql: postgres.Sql, userId: string): Promise
   }
 }
 
-/**
- * @deprecated Use deleteTestClinic per-clinic instead. cleanupAll wiped
- * EVERY row of 14 tables and ate dev/staging fixtures on every test run
- * (issue #5). Now a no-op so existing callers stop being destructive
- * without forcing a same-PR refactor of every test file. Will be removed
- * once all callers in packages/db/tests/rls/* are migrated.
- */
-export async function cleanupAll(_sql: postgres.Sql): Promise<void> {
-  console.warn(
-    'cleanupAll is deprecated and now a no-op — track createdClinics and call deleteTestClinic(sql, id) in afterAll. See issue #5.',
-  );
-}
