@@ -30,30 +30,27 @@ export async function createClinicAction(
 
   const admin = getSupabaseAdminClient()
 
-  const { data: clinicData, error: clinicError } = await admin
-    .from('clinics')
-    .insert({ name: result.data.name, slug: result.data.slug })
-    .select('id, slug')
-    .single()
+  // PR-D #10: atomic RPC replaces dual-insert + manual cleanup. clinic +
+  // clinic_members(owner) commit in one transaction; failure at any step
+  // rolls back automatically — no orphan-clinic window.
+  const { data, error } = await admin.rpc('create_clinic_with_owner', {
+    p_name: result.data.name,
+    p_slug: result.data.slug,
+    p_user_id: user.id,
+  })
 
-  if (clinicError || !clinicData) {
-    if (clinicError?.code === '23505') {
+  if (error) {
+    if (error.code === '23505') {
       return { error: 'Este slug já está em uso. Escolha outro.' }
     }
     return { error: 'Erro ao criar clínica. Tente novamente.' }
   }
 
-  const clinic = clinicData as { id: string; slug: string }
-
-  const { error: memberError } = await admin
-    .from('clinic_members')
-    .insert({ clinic_id: clinic.id, user_id: user.id, role: 'owner' })
-
-  if (memberError) {
-    await admin.from('clinics').delete().eq('id', clinic.id)
-    return { error: 'Erro ao configurar clínica. Tente novamente.' }
+  const row = (Array.isArray(data) ? data[0] : data) as { id: string; slug: string } | null
+  if (!row) {
+    return { error: 'Erro ao criar clínica. Tente novamente.' }
   }
 
   revalidatePath('/', 'layout')
-  redirect(`/${clinic.slug}`)
+  redirect(`/${row.slug}`)
 }
