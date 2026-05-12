@@ -4,7 +4,9 @@
 
 **Goal:** Endereça 5 issues de segurança/multi-tenant acumuladas desde PR-A: onboarding atomicidade, escalable user lookup, defense-in-depth no UPDATE de integrações WhatsApp, testes cross-tenant explícitos, e correção da flag `escalated` no dispatcher.
 
-**Architecture:** 2 migrations Postgres (0033 RPC atômica de onboarding + 0034 trigger imutabilidade de `clinic_integrations.clinic_id`), refactors em 2 server actions Next, ajuste de lógica em 1 dispatcher AI, 1 ajuste em adapter Kapso, 3 conjuntos de testes (DB integration + unit + adapter).
+**Architecture:** 3 migrations Postgres (0033 RPC atômica de onboarding, 0034 RPC email→user_id lookup, 0035 trigger imutabilidade de `clinic_integrations.clinic_id`), refactors em 2 server actions Next, ajuste de lógica em 1 dispatcher AI, 1 ajuste em adapter Kapso, 4 conjuntos de testes (DB integration + unit + adapter + dispatcher).
+
+> Note: A versão original do plan previa apenas 2 migrations (RPC + trigger). Durante a implementação, o lookup por email do issue #9 foi promovido a uma migration própria (0034) para manter coesão de escopo por migration — resultando em 3 migrations no entregue.
 
 **Tech Stack:** Postgres (SECURITY DEFINER + plpgsql), Supabase MCP `apply_migration` + `get_advisors`, Vitest, postgres.js client, `@supabase/supabase-js` admin client.
 
@@ -21,7 +23,8 @@
 
 **Create:**
 - `packages/db/migrations/0033_create_clinic_with_owner.sql` — atomic onboarding RPC
-- `packages/db/migrations/0034_clinic_integrations_immutable_clinic_id.sql` — trigger blocking `clinic_id` mutation
+- `packages/db/migrations/0034_get_user_id_by_email_internal.sql` — RPC email→user_id (substitui listUsers full-fetch)
+- `packages/db/migrations/0035_clinic_integrations_immutable_clinic_id.sql` — trigger blocking `clinic_id` mutation
 - `packages/db/tests/rls/create-clinic-with-owner.test.ts` — RPC integration test
 - `packages/db/tests/rls/clinic-integrations-immutable.test.ts` — trigger integration test
 
@@ -418,7 +421,7 @@ git commit -m "fix(members): replace listUsers full-fetch with email-filter RPC 
 ## Task 3 — Issue #7: `phone_number_id` UPDATE clinic_id guard (defesa em profundidade)
 
 **Files:**
-- Create: `packages/db/migrations/0034_clinic_integrations_immutable_clinic_id.sql`
+- Create: `packages/db/migrations/0035_clinic_integrations_immutable_clinic_id.sql`
 - Create: `packages/db/tests/rls/clinic-integrations-immutable.test.ts`
 - Modify: `packages/integrations/whatsapp/kapso/src/adapter.ts:115-119`
 - Modify: `packages/integrations/whatsapp/kapso/tests/adapter.test.ts`
@@ -503,7 +506,7 @@ Expected: FAIL — first test passes (no trigger) where it should raise.
 ### Step 3.3 — Create migration 0034
 
 ```sql
--- 0034_clinic_integrations_immutable_clinic_id.sql
+-- 0035_clinic_integrations_immutable_clinic_id.sql
 --
 -- Issue PR-D #7 (post-chat-1 backlog #4): defesa em profundidade no UPDATE
 -- de clinic_integrations. App-level já adicionou .eq('clinic_id', ctx.clinicId)
@@ -547,8 +550,8 @@ REVOKE EXECUTE ON FUNCTION public.enforce_clinic_integrations_clinic_id_immutabl
 
 ### Step 3.4 — Apply migration via MCP + verify GREEN + advisors
 
-```
-mcp.apply_migration(project_id, '0034_clinic_integrations_immutable_clinic_id', query=…)
+```text
+mcp.apply_migration(project_id, '0035_clinic_integrations_immutable_clinic_id', query=…)
 ```
 
 Run: `pnpm --filter @medina/db test -- clinic-integrations-immutable.test.ts` → PASS (3 tests).
@@ -604,7 +607,7 @@ Run: `pnpm --filter @medina/db test -- clinic-integrations-immutable.test.ts` �
 ### Step 3.9 — Commit
 
 ```bash
-git add packages/db/migrations/0034_clinic_integrations_immutable_clinic_id.sql \
+git add packages/db/migrations/0035_clinic_integrations_immutable_clinic_id.sql \
         packages/db/tests/rls/clinic-integrations-immutable.test.ts \
         packages/integrations/whatsapp/kapso/src/adapter.ts \
         packages/integrations/whatsapp/kapso/tests/adapter.test.ts

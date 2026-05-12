@@ -18,7 +18,7 @@
 CREATE OR REPLACE FUNCTION public.get_user_id_by_email_internal(p_email text)
 RETURNS uuid
 LANGUAGE plpgsql SECURITY DEFINER
-SET search_path = auth, public, pg_catalog, pg_temp AS $$
+SET search_path = pg_catalog, auth, public, pg_temp AS $$
 DECLARE
   v_user_id uuid;
 BEGIN

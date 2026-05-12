@@ -14,12 +14,15 @@
 --
 -- BEFORE UPDATE: aborta antes de qualquer side effect (audit trigger AFTER
 -- UPDATE em outras tabelas continua intacto). Não precisa SECURITY DEFINER
--- (executa no contexto da operação) — também não precisa search_path
--- explícito porque só usa NEW/OLD records e RAISE.
+-- (executa no contexto da operação) — mas search_path explícito mesmo assim
+-- pra silenciar o advisor function_search_path_mutable e seguir convenção
+-- dos demais trigger functions do projeto (set_updated_at já tem o mesmo
+-- problema flaggeado; aqui evitamos adicionar mais um warning).
 -- ════════════════════════════════════════════════════════════════════════════
 
 CREATE OR REPLACE FUNCTION public.enforce_clinic_integrations_clinic_id_immutable()
-RETURNS TRIGGER LANGUAGE plpgsql AS $$
+RETURNS TRIGGER LANGUAGE plpgsql
+SET search_path = pg_catalog, pg_temp AS $$
 BEGIN
   IF NEW.clinic_id IS DISTINCT FROM OLD.clinic_id THEN
     RAISE EXCEPTION 'clinic_integrations.clinic_id is immutable: cannot change from % to %',

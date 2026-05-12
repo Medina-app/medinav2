@@ -21,7 +21,7 @@ CREATE OR REPLACE FUNCTION public.create_clinic_with_owner(
 )
 RETURNS TABLE (id uuid, slug text)
 LANGUAGE plpgsql SECURITY DEFINER
-SET search_path = public, pg_catalog, pg_temp AS $$
+SET search_path = pg_catalog, public, pg_temp AS $$
 DECLARE
   v_clinic_id uuid;
 BEGIN
