@@ -27,18 +27,24 @@ export async function inviteMemberAction(input: unknown): Promise<ActionResult> 
   const ctx = await getTenantContext()
   if (!hasPermission(ctx.role, 'member:manage')) return { error: 'Sem permissão para convidar membros.' }
 
+  // PR-D #9: O(1) lookup via SECURITY DEFINER RPC. Antes, listUsers() fetchava
+  // TODOS os users da plataforma sem paginação — OOM a partir de ~1k users.
   const adminClient = getSupabaseAdminClient()
-  const { data: { users } } = await adminClient.auth.admin.listUsers()
-  const target = users.find(u => u.email === parsed.data.email)
-
-  if (!target) {
+  const { data: targetUserId, error: lookupErr } = await adminClient.rpc(
+    'get_user_id_by_email_internal',
+    { p_email: parsed.data.email },
+  )
+  if (lookupErr) {
+    return { error: 'Erro ao buscar usuário. Tente novamente.' }
+  }
+  if (!targetUserId) {
     return { error: 'Usuário ainda não tem conta no Medina. Peça pra ele criar conta primeiro.' }
   }
 
   const supabase = await getSupabaseServerClient()
   const { error } = await supabase.from('clinic_members').insert({
     clinic_id: ctx.clinicId,
-    user_id: target.id,
+    user_id: targetUserId as string,
     role: parsed.data.role,
     invited_by: ctx.user.id,
     invited_at: new Date().toISOString(),
