@@ -8,6 +8,7 @@ const items = [
   { label: 'Membros', href: 'members' },
   { label: 'Integrações', href: 'integrations' },
   { label: 'Memória da IA', href: 'ai-memory' },
+  { label: 'Catálogo PEP', href: 'pep-catalog' },
 ]
 
 export function SettingsNav({ slug }: { slug: string }) {
