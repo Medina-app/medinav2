@@ -113,6 +113,27 @@ export default async function PepCatalogPage() {
       .limit(PAGE_LIMIT),
   ])
 
+  // Surface query failures — `.data ?? []` mascarava erros como "catalog vazio".
+  const queryError = specsRes.error ?? docsRes.error ?? procsRes.error
+  if (queryError) {
+    return (
+      <div style={{ maxWidth: 720, display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <h1
+          style={{
+            fontSize: 18,
+            fontWeight: 600,
+            letterSpacing: '-0.025em',
+            color: 'var(--luma-text-primary)',
+            margin: 0,
+          }}
+        >
+          Catálogo PEP
+        </h1>
+        <Empty label="Não foi possível carregar o catálogo PEP no momento. Tente recarregar a página." />
+      </div>
+    )
+  }
+
   const specialties = (specsRes.data ?? []) as SpecialtyRow[]
   const doctors = (docsRes.data ?? []) as DoctorRow[]
   const procedures = (procsRes.data ?? []) as ProcedureRow[]

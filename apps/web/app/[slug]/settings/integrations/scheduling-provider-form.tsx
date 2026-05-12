@@ -43,12 +43,19 @@ export function SchedulingProviderForm({ initialProvider, canManage }: Props) {
 
   function handleSave() {
     startTransition(async () => {
-      const result = await updateSchedulingProviderAction({ provider: selected })
-      if (result.error) {
-        toast.error(result.error)
-        return
+      try {
+        const result = await updateSchedulingProviderAction({ provider: selected })
+        if (result.error) {
+          toast.error(result.error)
+          return
+        }
+        toast.success('Provider atualizado.')
+      } catch (err) {
+        // Server action lança em casos de rede/serialização — caller perde feedback
+        // sem catch explícito.
+        const message = err instanceof Error ? err.message : 'Erro inesperado ao salvar.'
+        toast.error(message)
       }
-      toast.success('Provider atualizado.')
     })
   }
 

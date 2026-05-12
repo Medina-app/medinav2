@@ -8,13 +8,45 @@ export default async function IntegrationsPage() {
   const ctx = await getTenantContext()
   const supabase = await getSupabaseServerClient()
 
-  const { data: clinic } = await supabase
+  const { data: clinic, error: clinicErr } = await supabase
     .from('clinics')
     .select('scheduling_provider')
     .eq('id', ctx.clinicId)
     .single()
 
-  const provider = ((clinic as { scheduling_provider?: string } | null)?.scheduling_provider ??
+  // Surface query failures explicitly — defaulting to 'none' would mask
+  // operational issues (RLS misconfig, DB outage) as legitimate "no provider".
+  if (clinicErr || !clinic) {
+    return (
+      <div style={{ maxWidth: 720, display: 'flex', flexDirection: 'column', gap: 16 }}>
+        <h1
+          style={{
+            fontSize: 18,
+            fontWeight: 600,
+            letterSpacing: '-0.025em',
+            color: 'var(--luma-text-primary)',
+            margin: 0,
+          }}
+        >
+          Integrações
+        </h1>
+        <div
+          style={{
+            padding: 16,
+            borderRadius: 8,
+            border: '1px solid var(--luma-border)',
+            background: 'var(--luma-bg-subtle)',
+          }}
+        >
+          <p style={{ fontSize: 13, color: 'var(--luma-text-primary)', margin: 0 }}>
+            Não foi possível carregar as configurações de integração. Tente recarregar a página.
+          </p>
+        </div>
+      </div>
+    )
+  }
+
+  const provider = ((clinic as { scheduling_provider?: string }).scheduling_provider ??
     'none') as Provider
   const canManage = hasPermission(ctx.role, 'integration:manage')
 
