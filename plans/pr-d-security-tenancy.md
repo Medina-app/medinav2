@@ -169,7 +169,7 @@ CREATE OR REPLACE FUNCTION public.create_clinic_with_owner(
 )
 RETURNS TABLE (id uuid, slug text)
 LANGUAGE plpgsql SECURITY DEFINER
-SET search_path = public, pg_catalog, pg_temp AS $$
+SET search_path = pg_catalog, public, pg_temp AS $$
 DECLARE
   v_clinic_id uuid;
 BEGIN
@@ -356,7 +356,7 @@ Append to migration 0033:
 CREATE OR REPLACE FUNCTION public.get_user_id_by_email_internal(p_email text)
 RETURNS uuid
 LANGUAGE plpgsql SECURITY DEFINER
-SET search_path = auth, public, pg_catalog, pg_temp AS $$
+SET search_path = pg_catalog, auth, public, pg_temp AS $$
 DECLARE
   v_user_id uuid;
 BEGIN
@@ -524,7 +524,8 @@ Expected: FAIL — first test passes (no trigger) where it should raise.
 -- ════════════════════════════════════════════════════════════════════════════
 
 CREATE OR REPLACE FUNCTION public.enforce_clinic_integrations_clinic_id_immutable()
-RETURNS TRIGGER LANGUAGE plpgsql AS $$
+RETURNS TRIGGER LANGUAGE plpgsql
+SET search_path = pg_catalog, pg_temp AS $$
 BEGIN
   IF NEW.clinic_id IS DISTINCT FROM OLD.clinic_id THEN
     RAISE EXCEPTION 'clinic_integrations.clinic_id is immutable: cannot change from % to %',
