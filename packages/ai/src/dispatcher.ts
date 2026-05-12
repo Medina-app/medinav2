@@ -60,7 +60,11 @@ interface ChatMessage {
 }
 
 interface ToolCallStep { payload?: { toolName?: string } }
-interface AgentStep { toolCalls?: ToolCallStep[] }
+interface ToolResultStep { payload?: { toolName?: string; result?: { ok?: boolean } } }
+interface AgentStep {
+  toolCalls?: ToolCallStep[]
+  toolResults?: ToolResultStep[]
+}
 
 /** AI-5: mapeia categoria do post-filter (que usa nomes da defaults) → EscalatedReason
  *  estruturado pra escalate_conversation_with_reason. Mantém invariante: nenhum NULL,
@@ -486,21 +490,22 @@ export async function dispatchAgent(args: DispatchAgentArgs): Promise<DispatchRe
             .totalUsage ?? usage
       }
 
-      // 6. Detect tool-call escalation (LLM chamou escalate_to_human). Tool já
-      //    inseriu system message + flipou state. Se LLM produziu goodbye text,
-      //    inserimos junto com o resto; se text vazio, skip insert.
+      // 6. Detect tool-call escalation. PR-D #13 fix: olhar pra toolResult.ok,
+      //    não toolCall mero. Antes, escalatedByStepShape flippava em qualquer
+      //    chamada de escalate_to_human — incluindo casos { ok:false }
+      //    (já-transferida, race) que NÃO devem registrar didEscalate=true.
       //
-      // AI-6 hotfix: confiamos na state transition do DB ao invés de inspecionar
-      // result.steps[i].toolCalls[j].payload?.toolName — shape interno do
-      // Mastra/AI-SDK varia entre versões e pode quebrar silenciosamente. Como
-      // a tool escalate_to_human chama escalate_conversation RPC que transita
-      // state pra waiting_human atomicamente, basta re-ler o state. Sinal extra
-      // pra `didEscalate` flag que dispara extract-patient-facts.
+      // AI-6 hotfix manteve fallback via state transition do DB pra cobrir
+      // shape variance do Mastra/AI-SDK e o path guardrail-driven (dispatcher
+      // chama escalate_conversation_with_reason direto, sem passar pela tool).
       const steps = ((result as { steps?: AgentStep[] }).steps) ?? []
-      const escalatedByStepShape = steps.some((s) =>
-        (s.toolCalls ?? []).some((tc) => tc.payload?.toolName === 'escalate_to_human'),
+      const escalatedByToolResult = steps.some((s) =>
+        (s.toolResults ?? []).some((tr) => {
+          if (tr.payload?.toolName !== 'escalate_to_human') return false
+          return tr.payload?.result?.ok === true
+        }),
       )
-      let escalated = escalatedByStepShape
+      let escalated = escalatedByToolResult
       if (!escalated) {
         const { data: convAfter } = await supabase
           .from('conversations')
