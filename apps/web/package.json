@@ -17,6 +17,7 @@
     "@medina/chat": "workspace:*",
     "@medina/integrations-calcom": "workspace:*",
     "@medina/integrations-core": "workspace:*",
+    "@medina/integrations-pep-ans": "workspace:*",
     "@medina/integrations-whatsapp-kapso": "workspace:*",
     "@medina/realtime": "workspace:*",
     "@supabase/supabase-js": "^2",

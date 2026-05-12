@@ -1,5 +1,6 @@
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import { CalcomClient } from '@medina/integrations-calcom/client';
+import { AnsClient } from '@medina/integrations-pep-ans/client';
 import {
   dispatchAgent,
   AgentDispatchSkipped,
@@ -149,6 +150,16 @@ function makeDefaultDeps(): DispatchAiAgentDeps {
         // ativa pra clinic. Sem integration → callback nem é chamado.
         buildCalcomClient: (cfg) =>
           new CalcomClient({ baseUrl: cfg.baseUrl, apiKey: cfg.apiKey }),
+        // M1a-2: instancia AnsClient quando clinic.scheduling_provider='pep_ans'
+        // + env vars ANS configuradas. Single-tenant via env no M1a (Mednobre);
+        // M1c migra pra clinic_integrations multi-tenant.
+        buildAnsClient: (cfg) =>
+          new AnsClient({
+            baseUrl: cfg.baseUrl,
+            clinicaToken: cfg.clinicaToken,
+            clinicaId: cfg.clinicaId,
+            clinicaUnidadeId: cfg.clinicaUnidadeId,
+          }),
       }),
   };
 }

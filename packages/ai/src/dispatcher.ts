@@ -12,6 +12,7 @@ import { createHaikuClassifier } from './guardrails/haiku-classifier.js'
 import { sanitizeEvidence } from './guardrails/sanitize.js'
 import type { EscalatedReason, GuardrailsConfig } from './guardrails/types.js'
 import { resolveCalcomConfig, type CalcomClientBuilder } from './calcom-config.js'
+import { resolveAnsConfig, type AnsClientBuilder } from './ans-config.js'
 import { loadPatientFacts, touchFacts } from './patient-memory/store.js'
 import { buildPatientFactsContext } from './patient-memory/context.js'
 import { parseAiMemoryConfig, type FactCategory, type PatientFact } from './patient-memory/types.js'
@@ -39,6 +40,11 @@ export interface DispatchAgentArgs {
    *  mock; produção usa factory que importa CalcomClient de @medina/integrations-calcom.
    *  Undefined → tools Cal.com retornam {ok:false, error:'calcom_not_configured'}. */
   buildCalcomClient?: CalcomClientBuilder
+  /** M1a-2: builder pra AnsClient quando clinic.scheduling_provider='pep_ans'
+   *  + env vars ANS configuradas. Tests injetam mock; produção wireia factory
+   *  que importa AnsClient real de @medina/integrations-pep-ans.
+   *  Undefined → tools PEP retornam {ok:false, error:'pep_ans_not_configured'}. */
+  buildAnsClient?: AnsClientBuilder
 }
 
 export interface DispatchResult {
@@ -117,30 +123,29 @@ function maybeHaikuClassifier(): LlmClassify | undefined {
  *   - DB errors on insert
  */
 export async function dispatchAgent(args: DispatchAgentArgs): Promise<DispatchResult> {
-  const { supabase, conversationId, clinicId, buildCalcomClient } = args
+  const { supabase, conversationId, clinicId, buildCalcomClient, buildAnsClient } = args
   let { agentName } = args
 
-  // PR-E GH #8: fallback ladder. Explicit args.agentName wins. Otherwise
-  // load per-clinic default from clinics.default_agent_name (migration 0036).
-  // Errors propagate — surfaces DB outages / permission issues to the Inngest
-  // worker (which retries) instead of silently routing to the hardcoded
-  // 'agente-principal' default. Mirrors the conversation/agent_config lookup
-  // patterns below (throw on error, not graceful fallback).
-  if (agentName == null) {
-    const { data: clinicRow, error: clinicErr } = await supabase
-      .from('clinics')
-      .select('default_agent_name')
-      .eq('id', clinicId)
-      .single()
-    if (clinicErr || !clinicRow) {
-      throw new Error(`clinic default_agent_name lookup failed: ${clinicErr?.message ?? 'not found'}`)
-    }
-    // Column is NOT NULL DEFAULT 'agente-principal' (migration 0036), so the
-    // ?? fallback is dead code in practice — belt-and-suspenders against
-    // future schema drift (someone dropping NOT NULL or renaming the column).
-    agentName =
-      (clinicRow as { default_agent_name?: string }).default_agent_name ?? 'agente-principal'
+  // PR-E GH #8 + M1a-2: load clinic.default_agent_name AND clinic.scheduling_provider
+  // num único SELECT. default_agent_name é fallback pra agentName quando args omitido;
+  // scheduling_provider routes ans vs calcom no toolCtx setup abaixo.
+  const { data: clinicRow, error: clinicErr } = await supabase
+    .from('clinics')
+    .select('default_agent_name, scheduling_provider')
+    .eq('id', clinicId)
+    .single()
+  if (clinicErr || !clinicRow) {
+    throw new Error(`clinic lookup failed: ${clinicErr?.message ?? 'not found'}`)
   }
+  const clinicData = clinicRow as {
+    default_agent_name?: string
+    scheduling_provider?: 'none' | 'calcom' | 'pep_ans'
+  }
+  if (agentName == null) {
+    agentName = clinicData.default_agent_name ?? 'agente-principal'
+  }
+  const schedulingProvider: 'none' | 'calcom' | 'pep_ans' =
+    clinicData.scheduling_provider ?? 'none'
 
   // 1. Load conversation + verify state and clinic ownership.
   const { data: conv, error: cErr } = await supabase
@@ -252,9 +257,10 @@ export async function dispatchAgent(args: DispatchAgentArgs): Promise<DispatchRe
         ? rawThreshold
         : parseFloat(rawThreshold)
   // AI-4: lookup Cal.com integration apenas se alguma tool Cal.com aparece em
-  // toolNames. Skip lookup pra clinics sem integration (zero overhead). Builder
-  // injetável pra testes; produção wireia CalcomClient real em apps/web/lib/inngest.
+  // toolNames + clinic.scheduling_provider='calcom'. Skip lookup pra clinics
+  // sem integration (zero overhead). Builder injetável pra testes.
   const needsCalcom =
+    schedulingProvider === 'calcom' &&
     buildCalcomClient !== undefined &&
     toolNames.some((n) =>
       n === 'check_availability' ||
@@ -266,6 +272,20 @@ export async function dispatchAgent(args: DispatchAgentArgs): Promise<DispatchRe
   const calcomClient =
     calcomConfig && buildCalcomClient ? buildCalcomClient(calcomConfig) : undefined
 
+  // M1a-2: lookup ANS PEP config quando scheduling_provider='pep_ans' E alguma
+  // tool PEP aparece em toolNames. Single-tenant via env vars no M1a; M1c
+  // migra pra clinic_integrations.
+  const needsAns =
+    schedulingProvider === 'pep_ans' &&
+    buildAnsClient !== undefined &&
+    toolNames.some((n) =>
+      n === 'check_pep_patient' ||
+      n === 'check_pep_availability' ||
+      n === 'list_pep_specialties',
+    )
+  const ansConfig = needsAns ? await resolveAnsConfig() : null
+  const ansClient = ansConfig && buildAnsClient ? buildAnsClient(ansConfig) : undefined
+
   const toolCtx: ToolContext = {
     clinicId,
     conversationId,
@@ -274,6 +294,7 @@ export async function dispatchAgent(args: DispatchAgentArgs): Promise<DispatchRe
     kbSimilarityThreshold,
     calcomClient,
     calcomDefaultEventTypeId: calcomConfig?.defaultEventTypeId,
+    ansClient,
   }
   const tools = buildToolsFromConfig(toolCtx, toolNames)
   const { agent } = await createAgent({ clinicId, agentName, supabase, tools })
