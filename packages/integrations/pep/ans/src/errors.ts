@@ -23,9 +23,18 @@ export class AnsApiError extends Error {
   }
 }
 
+/** Mask all but last 4 digits — avoids PII leak in logs/observability. */
+function maskPhone(phone: string): string {
+  return phone.replace(/\d(?=\d{4})/g, '*')
+}
+
 export class AnsPatientNotFoundError extends AnsApiError {
   constructor(telefone: string, body?: unknown) {
-    super({ status: 404, body, message: `ANS patient not found for telefone=${telefone}` })
+    super({
+      status: 404,
+      body,
+      message: `ANS patient not found for telefone=${maskPhone(telefone)}`,
+    })
     this.name = 'AnsPatientNotFoundError'
   }
 }

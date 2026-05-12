@@ -73,7 +73,7 @@ export class AnsClient {
       if (err instanceof AnsApiError && err.status === 404) return null
       throw err
     }
-    const json = (await res.json()) as {
+    const json = (await this.parseJsonOrApiError(res, 'lookupPatientByPhone')) as {
       paciente?: {
         id_paciente?: string
         nome?: string
@@ -119,7 +119,7 @@ export class AnsClient {
     })
     const url = `${this.baseUrl}/agenda/dias-disponiveis?${params.toString()}`
     const res = await this.requestWithRetry(url, { method: 'GET' })
-    const json = (await res.json()) as {
+    const json = (await this.parseJsonOrApiError(res, 'listAvailableDays')) as {
       dias?: Array<{ data?: string; qtd_slots?: number }>
     }
     const dias = json.dias ?? []
@@ -150,7 +150,7 @@ export class AnsClient {
     })
     const url = `${this.baseUrl}/agenda/horarios-disponiveis?${params.toString()}`
     const res = await this.requestWithRetry(url, { method: 'GET' })
-    const json = (await res.json()) as {
+    const json = (await this.parseJsonOrApiError(res, 'listAvailableHours')) as {
       horarios?: Array<{ hora_inicio?: string; hora_fim?: string; duracao_minutos?: number }>
     }
     const horarios = json.horarios ?? []
@@ -167,6 +167,21 @@ export class AnsClient {
   }
 
   // ─── private ────────────────────────────────────────────────────────────────
+
+  /**
+   * Coerces JSON parse failure (e.g. empty body, malformed payload on 2xx) into
+   * a typed AnsApiError so callers never see raw SyntaxError leak through.
+   */
+  private async parseJsonOrApiError(res: Response, context: string): Promise<unknown> {
+    try {
+      return await res.json()
+    } catch {
+      throw new AnsApiError({
+        status: res.status,
+        message: `${context}: invalid JSON response`,
+      })
+    }
+  }
 
   private async requestWithRetry(url: string, init: RequestInit): Promise<Response> {
     const headers: Record<string, string> = {
