@@ -95,7 +95,7 @@ interface FakeRows {
   }>
   insertedMessageId?: string
   /** PR-E GH #8: clinics.default_agent_name fallback when args.agentName omitted. */
-  clinicRow?: { default_agent_name: string } | null
+  clinicRow?: { default_agent_name: string; scheduling_provider?: 'none' | 'calcom' | 'pep_ans' } | null
   /** PR-E GH #8: simulate DB error on the clinic lookup. */
   clinicError?: { message: string } | null
 }
@@ -689,7 +689,7 @@ describe('dispatchAgent', () => {
     expect(mockCreateAgent).toHaveBeenCalledWith(expect.objectContaining({ agentName: 'agente-triagem' }))
   })
 
-  it('throws when clinic default_agent_name lookup fails — no silent fallback (GH #8)', async () => {
+  it('throws when clinic lookup fails — no silent fallback (GH #8 + M1a-2)', async () => {
     const { sb } = makeSupabase({
       conversation: baseConv,
       agentConfig: baseCfg,
@@ -704,7 +704,7 @@ describe('dispatchAgent', () => {
         supabase: sb,
         // agentName omitted — forces clinic lookup
       }),
-    ).rejects.toThrow(/clinic default_agent_name lookup failed: connection refused/)
+    ).rejects.toThrow(/clinic lookup failed: connection refused/)
   })
 
   it('explicit args.agentName overrides clinics.default_agent_name (GH #8)', async () => {
@@ -725,6 +725,114 @@ describe('dispatchAgent', () => {
     })
 
     expect(mockCreateAgent).toHaveBeenCalledWith(expect.objectContaining({ agentName: 'agente-explicit' }))
+  })
+
+  // ─── M1a-2: scheduling_provider routing (PEP vs Cal.com) ──────────────────
+
+  it('injects ansClient when scheduling_provider=pep_ans + PEP tool listed + env+builder available (M1a-2)', async () => {
+    const previousEnv = {
+      ANS_BASE_URL: process.env['ANS_BASE_URL'],
+      ANS_CLINICA_TOKEN: process.env['ANS_CLINICA_TOKEN'],
+      ANS_CLINICA_ID: process.env['ANS_CLINICA_ID'],
+      ANS_CLINICA_UNIDADE_ID: process.env['ANS_CLINICA_UNIDADE_ID'],
+    }
+    process.env['ANS_BASE_URL'] = 'https://api.ans.example.com/v1'
+    process.env['ANS_CLINICA_TOKEN'] = 'test-token'
+    process.env['ANS_CLINICA_ID'] = '384'
+    process.env['ANS_CLINICA_UNIDADE_ID'] = '374'
+
+    const ansClientMock = {
+      lookupPatientByPhone: vi.fn(),
+      listAvailableDays: vi.fn(),
+      listAvailableHours: vi.fn(),
+    }
+    const buildAnsClient = vi.fn().mockReturnValue(ansClientMock)
+    const buildSpy = vi.fn().mockReturnValue({})
+    vi.doMock('../src/tools/build.js', () => ({ buildToolsFromConfig: buildSpy }))
+    vi.resetModules()
+
+    const { sb } = makeSupabase({
+      conversation: baseConv,
+      agentConfig: { ...baseCfg, tools: ['check_pep_patient'] },
+      clinicRow: { default_agent_name: 'agente-principal', scheduling_provider: 'pep_ans' },
+    })
+    const { dispatchAgent } = await import('../src/dispatcher.js')
+    await dispatchAgent({
+      conversationId: 'conv-1',
+      clinicId: 'clinic-A',
+      messageId: 'm',
+      supabase: sb,
+      buildAnsClient,
+    })
+
+    expect(buildAnsClient).toHaveBeenCalledWith(
+      expect.objectContaining({
+        baseUrl: 'https://api.ans.example.com/v1',
+        clinicaId: 384,
+        clinicaUnidadeId: 374,
+      }),
+    )
+    const toolCtx = buildSpy.mock.calls[0]?.[0] as { ansClient?: unknown }
+    expect(toolCtx.ansClient).toBe(ansClientMock)
+
+    for (const [k, v] of Object.entries(previousEnv)) {
+      if (v === undefined) delete process.env[k]
+      else process.env[k] = v
+    }
+  })
+
+  it('does NOT inject ansClient when scheduling_provider=calcom (M1a-2)', async () => {
+    const buildAnsClient = vi.fn()
+    const buildSpy = vi.fn().mockReturnValue({})
+    vi.doMock('../src/tools/build.js', () => ({ buildToolsFromConfig: buildSpy }))
+    vi.resetModules()
+
+    const { sb } = makeSupabase({
+      conversation: baseConv,
+      agentConfig: { ...baseCfg, tools: ['check_pep_patient'] },
+      clinicRow: { default_agent_name: 'agente-principal', scheduling_provider: 'calcom' },
+    })
+    const { dispatchAgent } = await import('../src/dispatcher.js')
+    await dispatchAgent({
+      conversationId: 'conv-1',
+      clinicId: 'clinic-A',
+      messageId: 'm',
+      supabase: sb,
+      buildAnsClient,
+    })
+
+    expect(buildAnsClient).not.toHaveBeenCalled()
+    const toolCtx = buildSpy.mock.calls[0]?.[0] as { ansClient?: unknown }
+    expect(toolCtx.ansClient).toBeUndefined()
+  })
+
+  it('leaves ansClient undefined when env vars absent (graceful — tools return ok:false) (M1a-2)', async () => {
+    const previousEnv = process.env['ANS_BASE_URL']
+    delete process.env['ANS_BASE_URL'] // simulate missing config
+    const buildAnsClient = vi.fn()
+    const buildSpy = vi.fn().mockReturnValue({})
+    vi.doMock('../src/tools/build.js', () => ({ buildToolsFromConfig: buildSpy }))
+    vi.resetModules()
+
+    const { sb } = makeSupabase({
+      conversation: baseConv,
+      agentConfig: { ...baseCfg, tools: ['check_pep_patient'] },
+      clinicRow: { default_agent_name: 'agente-principal', scheduling_provider: 'pep_ans' },
+    })
+    const { dispatchAgent } = await import('../src/dispatcher.js')
+    await dispatchAgent({
+      conversationId: 'conv-1',
+      clinicId: 'clinic-A',
+      messageId: 'm',
+      supabase: sb,
+      buildAnsClient,
+    })
+
+    expect(buildAnsClient).not.toHaveBeenCalled()
+    const toolCtx = buildSpy.mock.calls[0]?.[0] as { ansClient?: unknown }
+    expect(toolCtx.ansClient).toBeUndefined()
+
+    if (previousEnv !== undefined) process.env['ANS_BASE_URL'] = previousEnv
   })
 
   // ─── AI-5 guardrails integration ────────────────────────────────────────────

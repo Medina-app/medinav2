@@ -76,6 +76,28 @@ export interface ToolContext {
   /** AI-4: default eventTypeId pra clinic — fallback quando doctor.calcom_event_type_ids[0]
    *  ausente. Vem de clinic_integrations.config.default_event_type_id. */
   calcomDefaultEventTypeId?: number
+  /** M1a-2: ANS PEP client instance — undefined quando
+   *  clinic.scheduling_provider != 'pep_ans' ou env vars ANS ausentes.
+   *  Tools PEP retornam erro estruturado (não throw) se ausente. */
+  ansClient?: AnsClientLike
+}
+
+/** M1a-2: minimal ANS PEP client interface — concrete impl em
+ *  @medina/integrations-pep-ans. Mirror de CalcomClientLike para evitar
+ *  dep cíclica @medina/ai → @medina/integrations. */
+export interface AnsClientLike {
+  lookupPatientByPhone(phone: string): Promise<{
+    id: string
+    fullName: string
+    cpf: string | null
+    phone: string | null
+  } | null>
+  listAvailableDays(args: { doctorAnsId: string; from: string; to: string }): Promise<
+    Array<{ date: string; slotsCount?: number }>
+  >
+  listAvailableHours(args: { doctorAnsId: string; date: string }): Promise<
+    Array<{ startTime: string; endTime: string; durationMinutes?: number }>
+  >
 }
 
 export interface AgentResponse {
