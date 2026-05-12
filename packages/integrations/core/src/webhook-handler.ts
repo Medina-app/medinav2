@@ -2,7 +2,7 @@ import { createClient } from '@supabase/supabase-js'
 import type { ClinicIntegration } from '@medina/db'
 import { verifyHmacSignature } from './signature'
 import { registry } from './registry'
-import { logger } from './logger'
+import { logger, type Logger } from './logger'
 import { mapClinicIntegration } from './mappers'
 import { InngestDispatchError } from './errors'
 import type { InngestSendFn, PublishEventFn, WebhookContext } from './types'
@@ -46,14 +46,17 @@ export async function handleWebhook(
   lookupFn: LookupFn = createDefaultLookup(),
   inngestSend?: InngestSendFn,
   publishEvent?: PublishEventFn,
+  loggerOverride?: Logger,
 ): Promise<Response> {
+  // PR-E #11: tests inject mock Logger here instead of spying on console.log.
+  const log: Logger = loggerOverride ?? logger
   const t0 = Date.now()
   const { type, provider, clinicId } = params
   const base = { clinic_id: clinicId, integration_id: '', type, provider }
 
   const integration = await lookupFn(type, provider, clinicId)
   if (!integration) {
-    logger.warn({
+    log.warn({
       ...base,
       action: 'lookup',
       duration_ms: Date.now() - t0,
@@ -65,7 +68,7 @@ export async function handleWebhook(
   const lb = { ...base, integration_id: integration.id }
 
   if (integration.status === 'disabled') {
-    logger.warn({
+    log.warn({
       ...lb,
       action: 'validate_status',
       duration_ms: Date.now() - t0,
@@ -76,7 +79,7 @@ export async function handleWebhook(
   }
 
   if (integration.type !== type || integration.provider !== provider) {
-    logger.warn({
+    log.warn({
       ...lb,
       action: 'validate_type_provider',
       duration_ms: Date.now() - t0,
@@ -91,7 +94,7 @@ export async function handleWebhook(
 
   if (integration.status !== 'configuring') {
     if (!integration.webhookSecret) {
-      logger.warn({
+      log.warn({
         ...lb,
         action: 'validate_signature',
         duration_ms: Date.now() - t0,
@@ -102,7 +105,7 @@ export async function handleWebhook(
     }
     const sig = req.headers.get(adapter.signatureHeader) ?? ''
     if (!verifyHmacSignature(integration.webhookSecret, rawBody, sig)) {
-      logger.warn({
+      log.warn({
         ...lb,
         action: 'validate_signature',
         duration_ms: Date.now() - t0,
@@ -132,7 +135,7 @@ export async function handleWebhook(
 
   try {
     const result = await adapter.handle(ctx)
-    logger.info({ ...lb, action: 'handle', duration_ms: Date.now() - t0, success: true })
+    log.info({ ...lb, action: 'handle', duration_ms: Date.now() - t0, success: true })
     return j(result, 200)
   } catch (err) {
     const error = err instanceof Error ? err.message : String(err)
@@ -140,7 +143,7 @@ export async function handleWebhook(
       // Surface a 5xx so the upstream sender (e.g. Kapso) retries the
       // delivery — otherwise a transient Inngest outage silently drops
       // status callbacks because we already 200'd the webhook.
-      logger.warn({
+      log.warn({
         ...lb,
         action: 'inngest_dispatch',
         duration_ms: Date.now() - t0,
@@ -149,7 +152,7 @@ export async function handleWebhook(
       })
       return new Response('inngest dispatch failed', { status: 503 })
     }
-    logger.error({ ...lb, action: 'handle', duration_ms: Date.now() - t0, success: false, error })
+    log.error({ ...lb, action: 'handle', duration_ms: Date.now() - t0, success: false, error })
     return j({ processed: false, reason: 'adapter_error' }, 200)
   }
 }

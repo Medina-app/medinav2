@@ -3,8 +3,24 @@ import { createHmac } from 'crypto'
 import { handleWebhook } from '../src/webhook-handler'
 import { registry } from '../src/registry'
 import { InngestDispatchError } from '../src/errors'
+import type { Logger, LogEntry } from '../src/logger'
 import type { AdapterInterface, IntegrationType, WebhookContext } from '../src/types'
 import type { ClinicIntegration } from '@medina/db'
+
+// PR-E #11: makes assertions on structured log args possible without spying
+// on console.log + JSON.parse. Test injects this mock via the loggerOverride
+// param of handleWebhook.
+function makeMockLogger(): { logger: Logger; calls: { level: 'info' | 'warn' | 'error'; entry: LogEntry }[] } {
+  const calls: { level: 'info' | 'warn' | 'error'; entry: LogEntry }[] = []
+  return {
+    calls,
+    logger: {
+      info: (e) => { calls.push({ level: 'info', entry: e }) },
+      warn: (e) => { calls.push({ level: 'warn', entry: e }) },
+      error: (e) => { calls.push({ level: 'error', entry: e }) },
+    },
+  }
+}
 
 const sign = (s: string, b: string) => createHmac('sha256', s).update(b, 'utf8').digest('hex')
 const SECRET = 'test-secret'
@@ -165,39 +181,43 @@ describe('handleWebhook', () => {
     expect(await res.text()).toBe('inngest dispatch failed')
   })
 
-  it('logs structured warn when InngestDispatchError surfaces', async () => {
+  it('logs structured warn when InngestDispatchError surfaces (PR-E #11: injected Logger)', async () => {
     const body = '{}'
     registry.register(
       makeAdapter({
         handle: vi.fn().mockRejectedValue(new InngestDispatchError(new Error('upstream down'))),
       }),
     )
-    const spy = vi.spyOn(console, 'log')
+    const { logger, calls } = makeMockLogger()
     await handleWebhook(
       req(body, { 'x-kapso-signature': sign(SECRET, body) }),
       PARAMS,
       vi.fn().mockResolvedValue(makeInt()),
+      undefined,
+      undefined,
+      logger,
     )
-    const entries = spy.mock.calls.map((c) => JSON.parse(c[0] as string) as Record<string, unknown>)
-    const warnEntry = entries.find(
-      (e) => e['level'] === 'warn' && e['action'] === 'inngest_dispatch',
-    )
-    expect(warnEntry?.['success']).toBe(false)
-    expect(String(warnEntry?.['error'])).toContain('inngest dispatch failed')
+    const warnEntry = calls.find((c) => c.level === 'warn' && c.entry.action === 'inngest_dispatch')
+    expect(warnEntry).toBeDefined()
+    expect(warnEntry!.entry.success).toBe(false)
+    expect(String(warnEntry!.entry.error)).toContain('inngest dispatch failed')
   })
 
-  it('logs structured error when adapter throws', async () => {
+  it('logs structured error when adapter throws (PR-E #11: injected Logger)', async () => {
     const body = '{}'
     registry.register(makeAdapter({ handle: vi.fn().mockRejectedValue(new Error('conn refused')) }))
-    const spy = vi.spyOn(console, 'log')
+    const { logger, calls } = makeMockLogger()
     await handleWebhook(
       req(body, { 'x-kapso-signature': sign(SECRET, body) }),
       PARAMS,
       vi.fn().mockResolvedValue(makeInt()),
+      undefined,
+      undefined,
+      logger,
     )
-    const entries = spy.mock.calls.map((c) => JSON.parse(c[0] as string) as Record<string, unknown>)
-    const errEntry = entries.find((e) => e['level'] === 'error')
-    expect(errEntry?.['success']).toBe(false)
-    expect(String(errEntry?.['error'])).toContain('conn refused')
+    const errEntry = calls.find((c) => c.level === 'error')
+    expect(errEntry).toBeDefined()
+    expect(errEntry!.entry.success).toBe(false)
+    expect(String(errEntry!.entry.error)).toContain('conn refused')
   })
 })
